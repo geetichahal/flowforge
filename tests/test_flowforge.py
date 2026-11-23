@@ -260,3 +260,28 @@ def test_repair_restores_missing_params_from_the_request():
     assert cond["params"]["operator"] == "greater_than"
     taken = {s["node"]: s["status"] for s in r["simulation"]["trace"]}
     assert taken["notify_slack"] == "ok"  # sample amount 250 > 100
+
+
+# ------------------------------------------------------------------ public server (Hugging Face Space)
+def test_public_server_blocks_private_push_targets(monkeypatch):
+    from fastapi.testclient import TestClient
+    import flowforge.api as api_mod
+    monkeypatch.setattr(api_mod, "PUBLIC", True)
+    c = TestClient(api_mod.create_app())
+    export = flowise.generate(good_plan())["export"]
+    for target in ("http://localhost:3000", "http://127.0.0.1:3000", "http://169.254.169.254", "http://10.0.0.5:3000", "file:///etc/passwd"):
+        r = c.post("/flowise/push-to", json={"export": export, "confirm": True, "url": target})
+        assert r.status_code == 400, target
+    assert c.post("/flowise/push", json={"export": export, "confirm": True}).status_code == 403
+    assert c.get("/health").json()["public"] is True
+
+
+def test_cors_allows_the_pages_site_only():
+    from fastapi.testclient import TestClient
+    from flowforge.api import create_app
+    c = TestClient(create_app())
+    ok = c.options("/run", headers={"Origin": "https://geetichahal.github.io", "Access-Control-Request-Method": "POST",
+                                    "Access-Control-Request-Headers": "content-type"})
+    assert ok.headers.get("access-control-allow-origin") == "https://geetichahal.github.io"
+    bad = c.options("/run", headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"})
+    assert "access-control-allow-origin" not in bad.headers

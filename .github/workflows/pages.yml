@@ -1,4 +1,4 @@
-name: Test and deploy website
+name: Test and deploy (website + server)
 
 on:
   push:
@@ -38,9 +38,39 @@ jobs:
         with:
           python-version: "3.12"
       - run: python tools/build_site.py site
+        env:
+          FLOWFORGE_API_URL: ${{ vars.FLOWFORGE_API_URL }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  space:
+    # Deploys the server (FastAPI + Ollama) to the Hugging Face Space named in vars.HF_SPACE.
+    needs: test
+    if: ${{ vars.HF_SPACE != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "huggingface_hub>=0.30"
+      - run: python tools/build_space.py build/space
+      - name: Upload to the Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE: ${{ vars.HF_SPACE }}
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          api.create_repo(os.environ["HF_SPACE"], repo_type="space", space_sdk="docker", exist_ok=True)
+          api.upload_folder(folder_path="build/space", repo_id=os.environ["HF_SPACE"], repo_type="space",
+                            commit_message=f"Deploy {os.environ.get('GITHUB_SHA', '')[:7]} from GitHub",
+                            delete_patterns=["*"])
+          print("Deployed to https://huggingface.co/spaces/" + os.environ["HF_SPACE"])
+          PY

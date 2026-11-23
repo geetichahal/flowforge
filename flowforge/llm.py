@@ -33,7 +33,7 @@ def available(timeout: float = 1.5) -> tuple[bool, str]:
     return False, f"Ollama is running but model '{want}' is not pulled (ollama pull {want})"
 
 
-def chat_json(system: str, user: str, timeout: float = 180) -> dict:
+def chat_json(system: str, user: str, timeout: float = 300) -> dict:
     """Ask the model for a single JSON object and parse it."""
     body = {
         "model": model(),

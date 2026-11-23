@@ -4,7 +4,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import ipaddress
+import os
+import socket
+from urllib.parse import urlparse
+
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -13,6 +19,11 @@ from .generators import flowise, n8n, python_gen
 from .plan import normalize
 from .simulator import simulate
 from .validator import validate_all, validate_plan
+
+# FLOWFORGE_PUBLIC=1 on a public deployment: outbound pushes may only go to public hosts.
+PUBLIC = os.environ.get("FLOWFORGE_PUBLIC") == "1"
+CORS_ORIGINS = [o.strip() for o in os.environ.get(
+    "FLOWFORGE_CORS_ORIGINS", "https://geetichahal.github.io,http://localhost:8000,http://127.0.0.1:8000").split(",") if o.strip()]
 
 PKG_DIR = Path(__file__).resolve().parent
 WEB_DIR = PKG_DIR.parent / "web"
@@ -53,14 +64,35 @@ def _valid_plan(body: PlanBody) -> dict:
     return plan
 
 
+def check_push_target(url: str) -> None:
+    """On a public server, refuse to send requests to private, loopback or link-local addresses (SSRF guard)."""
+    if not PUBLIC:
+        return
+    u = urlparse(url)
+    if u.scheme not in ("http", "https") or not u.hostname:
+        raise HTTPException(400, "Flowise URL must be http(s)://host")
+    try:
+        addrs = {ai[4][0] for ai in socket.getaddrinfo(u.hostname, u.port or (443 if u.scheme == "https" else 80))}
+    except socket.gaierror:
+        raise HTTPException(400, f"Cannot resolve {u.hostname}")
+    for a in addrs:
+        ip = ipaddress.ip_address(a.split("%")[0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+            raise HTTPException(400, "This public server can only reach a Flowise with a public address. "
+                                     "For a Flowise on your own machine, run FlowForge locally (python -m flowforge serve).")
+
+
 def create_app(with_ui: bool = False) -> FastAPI:
     app = FastAPI(title="FlowForge", version="1.0.0",
                   description="Natural-language automations rendered as Flowise flows, n8n workflows and Python scripts.")
+    app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["GET", "POST"],
+                       allow_headers=["Content-Type"])
 
     @app.get("/health")
     def health():
         ok, info = llm.available()
-        return {"ok": True, "llm": {"available": ok, "detail": info}, "catalog_nodes": len(catalog.CATALOG)}
+        return {"ok": True, "llm": {"available": ok, "detail": info}, "catalog_nodes": len(catalog.CATALOG),
+                "public": PUBLIC}
 
     @app.get("/catalog")
     def get_catalog():
@@ -104,6 +136,8 @@ def create_app(with_ui: bool = False) -> FastAPI:
 
     @app.post("/flowise/push")
     def push(body: FlowisePush):
+        if PUBLIC:
+            raise HTTPException(403, "Disabled on the public server; use /flowise/push-to with your Flowise URL")
         if not body.confirm:
             raise HTTPException(400, "Set confirm=true to create this flow in Flowise")
         from . import flowise_client
@@ -117,6 +151,7 @@ def create_app(with_ui: bool = False) -> FastAPI:
         """Like /flowise/push, but with the Flowise URL and API key given per request (used by the website)."""
         if not body.confirm:
             raise HTTPException(400, "Set confirm=true to create this flow in Flowise")
+        check_push_target(body.url)
         from . import flowise_client
         try:
             return flowise_client.create_flow(body.export, base=body.url, api_key=body.api_key or None)

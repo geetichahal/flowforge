@@ -3,6 +3,8 @@
  *  - server:  the FastAPI backend (python -m flowforge serve) — LLM planner + push to Flowise
  *  - browser: the same Python engine running in Pyodide — for static hosting, no server needed
  * Add ?engine=browser to force the in-browser engine.
+ * The server address comes from <meta name="flowforge-api"> (set at build time), or ?api=<url>;
+ * empty means "same origin" (the page is served by the server itself).
  */
 "use strict";
 
@@ -37,6 +39,14 @@ const el = (tag, attrs = {}, ...kids) => {
   return n;
 };
 
+const API_BASE = (() => {
+  const q = new URLSearchParams(location.search).get("api");
+  const m = document.querySelector('meta[name="flowforge-api"]');
+  const v = (q ?? (m ? m.content : "")).trim();
+  return v && !v.endsWith("/") ? v + "/" : v;
+})();
+const api = (path) => API_BASE + path;
+
 let engine = null;
 let last = null;
 
@@ -44,15 +54,21 @@ let last = null;
 async function detectEngine() {
   const forceBrowser = new URLSearchParams(location.search).get("engine") === "browser";
   if (!forceBrowser) {
+    if (API_BASE) setEngine("busy", "Connecting to the FlowForge server…");
     try {
-      const r = await fetch("health", { cache: "no-store" });
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), API_BASE ? 8000 : 3000);
+      const r = await fetch(api("health"), { cache: "no-store", signal: ctl.signal });
+      clearTimeout(timer);
       if (r.ok) {
         const h = await r.json();
-        if (h && h.catalog_nodes) return { kind: "server", health: h };
+        if (h && h.catalog_nodes) return { kind: "server", health: h, remote: Boolean(API_BASE) };
       }
-    } catch (_) { /* no backend: fall through */ }
+    } catch (_) { /* no backend, or it is asleep: fall through */ }
   }
-  return loadBrowserEngine();
+  const eng = await loadBrowserEngine();
+  eng.serverDown = Boolean(API_BASE) && !forceBrowser;
+  return eng;
 }
 
 function loadScript(src) {
@@ -80,7 +96,7 @@ async function loadBrowserEngine() {
 
 async function runPipeline(request, mode, injectFault) {
   if (engine.kind === "server") {
-    const r = await fetch("run", {
+    const r = await fetch(api("run"), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ request, mode, inject_fault: injectFault }),
     });
@@ -250,7 +266,7 @@ function pushForm(r) {
   btn.addEventListener("click", async () => {
     btn.disabled = true; out.textContent = "Creating…";
     try {
-      const res = await fetch("flowise/push-to", {
+      const res = await fetch(api("flowise/push-to"), {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ export: r.flowise.export, confirm: true, url: url.value, api_key: key.value }),
       });
@@ -260,8 +276,11 @@ function pushForm(r) {
     } catch (e) { out.textContent = "Could not create the flow: " + e.message; }
     btn.disabled = false;
   });
+  const hint = engine.health && engine.health.public
+    ? el("div", { class: "muted", text: "The public server can only reach a Flowise with a public address. For a Flowise on your own machine, run FlowForge locally or import the file." })
+    : null;
   return el("div", { class: "push" }, el("strong", {}, "Send straight to your Flowise"),
-    el("div", { class: "row" }, url, key, btn), out);
+    el("div", { class: "row" }, url, key, btn), hint, out);
 }
 
 function renderN8n(r) {
@@ -363,17 +382,26 @@ function selectTab(id) {
   try { localStorage.setItem("flowforge-tab", id); } catch (_) {}
 }
 
-async function generate() {
+async function generate(modeOverride) {
   const req = $("request").value.trim();
   if (!req) { $("status").replaceChildren(el("span", { class: "pill err" }, "Type a request first")); return; }
   $("go").disabled = true; $("go").textContent = "Generating…";
-  $("status").replaceChildren(el("span", { class: "pill neutral" }, "Planning, generating and checking…"));
+  const mode = typeof modeOverride === "string" ? modeOverride : $("mode").value;
+  const usesLlm = engine.kind === "server" && engine.health.llm.available && mode !== "template";
+  const started = Date.now();
+  const meta = el("span", { class: "meta" });
+  $("status").replaceChildren(el("span", { class: "pill neutral" }, usesLlm ? "The LLM is planning…" : "Planning, generating and checking…"), meta);
+  const tick = setInterval(() => {
+    const sec = Math.round((Date.now() - started) / 1000);
+    meta.textContent = usesLlm ? `${sec}s · a small model on free CPU takes 30–120s` : `${sec}s`;
+  }, 1000);
   try {
     await new Promise((r) => setTimeout(r, 20)); // let the status paint before Pyodide blocks the thread
-    render(await runPipeline(req, $("mode").value, $("fault").checked));
+    render(await runPipeline(req, mode, $("fault").checked));
   } catch (e) {
     $("status").replaceChildren(el("span", { class: "pill err" }, "Error"), el("span", { class: "meta", text: e.message }));
   }
+  clearInterval(tick);
   $("go").disabled = false; $("go").textContent = "Generate";
 }
 
@@ -404,14 +432,17 @@ function init() {
     engine = eng;
     if (eng.kind === "server") {
       const llm = eng.health.llm;
-      setEngine(llm.available ? "ok" : "warn", llm.available ? `Server · LLM: ${llm.detail}` : "Server · rule-based planner (Ollama not running)");
+      const where = eng.remote ? "Online server" : "Server";
+      setEngine(llm.available ? "ok" : "warn", llm.available ? `${where} · LLM planner: ${llm.detail}` : `${where} · rule-based planner (Ollama not running)`);
     } else {
-      setEngine("ok", "Running in your browser · rule-based planner");
+      setEngine(eng.serverDown ? "warn" : "ok", eng.serverDown
+        ? "Server asleep or unreachable · running in your browser (reload in a minute to use it)"
+        : "Running in your browser · rule-based planner");
       $("mode").value = "template";
       for (const o of $("mode").options) if (o.value !== "template") o.disabled = true;
     }
     $("go").disabled = false;
-    generate();
+    generate("template"); // instant first result; your own requests use the planner chosen above
   }).catch((e) => {
     setEngine("warn", "Engine failed to load");
     $("status").replaceChildren(el("span", { class: "pill err" }, "Could not start"), el("span", { class: "meta", text: e.message }));
