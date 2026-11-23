@@ -1,6 +1,7 @@
 """End-to-end pipeline: plan -> validate -> generate x3 -> validate -> (revise)* -> simulate."""
 from __future__ import annotations
 
+import os
 import time
 
 from . import planner
@@ -10,6 +11,7 @@ from .simulator import simulate
 from .validator import Report, validate_all, validate_plan
 
 MAX_ATTEMPTS = 3
+LLM_BUDGET_S = float(os.environ.get("FLOWFORGE_LLM_BUDGET", "60"))
 
 
 def generate_all(plan: dict) -> dict:
@@ -52,6 +54,10 @@ def run(request: str, mode: str = "auto", max_attempts: int = MAX_ATTEMPTS,
             break
         if attempt == max_attempts:
             break
+        # Keep a request under ~100 s (proxies such as Cloudflare tunnels time out): once the
+        # LLM budget is spent, further revisions use the instant rule-based repairer.
+        if source.startswith("llm") and time.time() - t0 > LLM_BUDGET_S:
+            source = "repair"
         plan, source, actions = planner.revise(plan, report, request, source)
         plan = normalize(plan)
         attempts[-1]["revision"] = actions

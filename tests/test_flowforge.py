@@ -285,3 +285,15 @@ def test_cors_allows_the_pages_site_only():
     assert ok.headers.get("access-control-allow-origin") == "https://geetichahal.github.io"
     bad = c.options("/run", headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"})
     assert "access-control-allow-origin" not in bad.headers
+
+
+def test_tunneled_requests_get_the_public_guard():
+    from fastapi.testclient import TestClient
+    from flowforge.api import create_app
+    c = TestClient(create_app())
+    export = flowise.generate(good_plan())["export"]
+    via_tunnel = c.post("/flowise/push-to", headers={"Cf-Connecting-Ip": "203.0.113.9"},
+                        json={"export": export, "confirm": True, "url": "http://127.0.0.1:3000"})
+    assert via_tunnel.status_code == 400
+    assert c.get("/health", headers={"Cf-Connecting-Ip": "203.0.113.9"}).json()["public"] is True
+    assert c.get("/health").json()["public"] is False  # same machine: local Flowise pushes allowed

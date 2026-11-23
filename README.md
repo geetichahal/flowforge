@@ -62,6 +62,21 @@ Shareable links: `?q=<request>&fault=1&tab=tab-sim` pre-fills the request, turns
 
 Checked in headless Chrome: server mode, browser-only mode, light and dark themes, and a 390px-wide viewport with no horizontal overflow.
 
+## Online server (your Mac + a free public link)
+
+```bash
+brew install ollama cloudflared && ollama pull qwen3:4b    # once
+tools/serve_public.sh                                      # Ctrl+C stops it
+```
+
+This starts Ollama, the FlowForge server and a free Cloudflare tunnel, then prints three links: the public site, the GitHub Pages site wired to this server (`…github.io/flowforge/?api=<tunnel>`), and a local one. The public link changes on every start and works only while the script runs.
+
+- **LLM planner:** `qwen3:4b` on the Mac. Measured at 46 s for a form → email + sheet request through the tunnel, with another job using the model at the same time. Cloudflare drops requests after about 100 s, so after 60 s of LLM work any further fixes use the instant rule-based repairer (`FLOWFORGE_LLM_BUDGET`).
+- **Safety:** anything arriving through the tunnel (it carries Cloudflare's `Cf-Connecting-Ip` header) is treated as public. "Create in Flowise" then refuses private, loopback and link-local addresses, so visitors can't use your Mac to reach your home network. From `http://127.0.0.1:8000` on the Mac itself, pushing to a local Flowise works.
+- **Without the server**, the Pages site falls back to the in-browser engine automatically.
+
+`space/` and `tools/build_space.py` package the same server as a Hugging Face Docker Space, with Ollama and the model baked in. Hugging Face now requires a PRO subscription for Docker Spaces, so this isn't deployed. Setting the repo variable `HF_SPACE` and the secret `HF_TOKEN` turns on the CI job that deploys it.
+
 ## Using the outputs
 
 | Output | How to use it |

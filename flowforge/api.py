@@ -9,7 +9,7 @@ import os
 import socket
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -64,9 +64,15 @@ def _valid_plan(body: PlanBody) -> dict:
     return plan
 
 
-def check_push_target(url: str) -> None:
+def is_public_request(request: Request | None) -> bool:
+    """Public server, or a request that reached a local server through a Cloudflare tunnel
+    (cloudflared always adds Cf-Connecting-Ip; requests from the machine itself never carry it)."""
+    return PUBLIC or (request is not None and "cf-connecting-ip" in request.headers)
+
+
+def check_push_target(url: str, public: bool = True) -> None:
     """On a public server, refuse to send requests to private, loopback or link-local addresses (SSRF guard)."""
-    if not PUBLIC:
+    if not public:
         return
     u = urlparse(url)
     if u.scheme not in ("http", "https") or not u.hostname:
@@ -89,10 +95,10 @@ def create_app(with_ui: bool = False) -> FastAPI:
                        allow_headers=["Content-Type"])
 
     @app.get("/health")
-    def health():
+    def health(request: Request):
         ok, info = llm.available()
         return {"ok": True, "llm": {"available": ok, "detail": info}, "catalog_nodes": len(catalog.CATALOG),
-                "public": PUBLIC}
+                "public": is_public_request(request)}
 
     @app.get("/catalog")
     def get_catalog():
@@ -135,8 +141,8 @@ def create_app(with_ui: bool = False) -> FastAPI:
         return pipeline.run(body.request, body.mode, inject_fault=body.inject_fault)
 
     @app.post("/flowise/push")
-    def push(body: FlowisePush):
-        if PUBLIC:
+    def push(body: FlowisePush, request: Request):
+        if is_public_request(request):
             raise HTTPException(403, "Disabled on the public server; use /flowise/push-to with your Flowise URL")
         if not body.confirm:
             raise HTTPException(400, "Set confirm=true to create this flow in Flowise")
@@ -147,11 +153,11 @@ def create_app(with_ui: bool = False) -> FastAPI:
             raise HTTPException(502, str(exc))
 
     @app.post("/flowise/push-to")
-    def push_to(body: FlowisePushTo):
+    def push_to(body: FlowisePushTo, request: Request):
         """Like /flowise/push, but with the Flowise URL and API key given per request (used by the website)."""
         if not body.confirm:
             raise HTTPException(400, "Set confirm=true to create this flow in Flowise")
-        check_push_target(body.url)
+        check_push_target(body.url, is_public_request(request))
         from . import flowise_client
         try:
             return flowise_client.create_flow(body.export, base=body.url, api_key=body.api_key or None)

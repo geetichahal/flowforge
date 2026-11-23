@@ -100,6 +100,7 @@ async function runPipeline(request, mode, injectFault) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ request, mode, inject_fault: injectFault }),
     });
+    if (r.status === 524 || r.status === 504) throw new Error("The server took too long to answer. Try the rule-based planner, or try again.");
     if (!r.ok) throw new Error(`Server returned ${r.status}: ${(await r.text()).slice(0, 200)}`);
     return r.json();
   }
