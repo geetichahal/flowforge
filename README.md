@@ -19,6 +19,8 @@
 
 Everything is free and local. No API key is needed to build, run, test or demo it.
 
+**Try it in your browser:** https://geetichahal.github.io/flowforge/. No install needed; the engine runs in the page. Watch self-correction with [this demo link](https://geetichahal.github.io/flowforge/?q=when%20a%20webhook%20receives%20an%20order%2C%20if%20the%20amount%20is%20over%20100%20post%20to%20slack%20otherwise%20add%20a%20row%20to%20the%20spreadsheet&fault=1&tab=tab-sim).
+
 ## Quick start
 
 ```bash
