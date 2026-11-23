@@ -1,0 +1,5 @@
+✓  1. trigger (email_received): email 'Invoice INV-2041 for October' from billing@acme-supplies.com
+✓  2. extract_attachments (extract_attachments): 1 attachment(s) kept
+✓  3. save_to_drive (drive_save): saved 'INV-2041.pdf' to mock Drive
+✓  4. notify_slack (slack_message): posted to mock slack
+RESULT: completed

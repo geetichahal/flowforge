@@ -1,0 +1,4 @@
+[WARNING] flowise/W_FLOWISE_POLLING (trigger): Flowise has no email-arrival event: the flow runs every 5 minutes and an Agent with the Gmail tool fetches the newest matching email.
+[WARNING] flowise/W_FLOWISE_APPROX (extract_attachments): Attachment extraction in Flowise works on attachment metadata returned by the Gmail tool; Gmail's tool has no attachment-download action.
+[WARNING] flowise/W_FLOWISE_BINARY (save_to_drive): Flowise's Drive tool uploads text content; binary attachments are passed as text. Check the uploaded file in Drive before relying on it.
+[WARNING] n8n/W_N8N_BINARY (save_to_drive): Uploads the Gmail trigger's first binary attachment (attachment_0).

@@ -1,0 +1,139 @@
+{
+  "name": "When I get an email with an invoice attached, save it to Drive and ping me on Sl",
+  "nodes": [
+    {
+      "name": "Email Received",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "has:attachment subject:invoice"
+        },
+        "options": {
+          "downloadAttachments": true
+        }
+      },
+      "id": "f3a91d6d-eedd-551c-b0ab-37f97a847b4f",
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "name": "Extract Attachments",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const types = [];\nconst out = [];\nfor (const item of $input.all()) {\n  for (const [key, bin] of Object.entries(item.binary || {})) {\n    const name = (bin.fileName || key).toLowerCase();\n    if (!types.length || types.some(t => name.endsWith('.' + t))) {\n      out.push({ json: { first_name: bin.fileName, key }, binary: { attachment_0: bin } });\n    }\n  }\n}\nreturn out;"
+      },
+      "id": "68816dce-029f-545d-9728-06863d648791",
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "name": "Save to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "parameters": {
+        "name": "={{ $('Extract Attachments').item.json.first_name }}",
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "root",
+          "mode": "id"
+        },
+        "inputDataFieldName": "attachment_0",
+        "options": {}
+      },
+      "id": "0d162e08-ee76-5ff3-ba4e-a67548ac5781",
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "name": "Slack Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "keypair",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=New email from {{ $('Email Received').item.json.from.value[0].address }}: {{ $('Email Received').item.json.subject }} (saved: {{ $('Save to Google Drive').item.json.webViewLink }})"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0820d34f-18fa-534f-9697-47a328c6882e",
+      "position": [
+        1680,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Email Received": {
+      "main": [
+        [
+          {
+            "node": "Extract Attachments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Attachments": {
+      "main": [
+        [
+          {
+            "node": "Save to Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Slack Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "generator": "FlowForge"
+  },
+  "tags": []
+}

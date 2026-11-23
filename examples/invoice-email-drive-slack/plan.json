@@ -1,0 +1,54 @@
+{
+  "name": "When I get an email with an invoice attached, save it to Drive and ping me on Sl",
+  "request": "when I get an email with an invoice attached, save it to Drive and ping me on Slack",
+  "nodes": [
+    {
+      "id": "trigger",
+      "type": "email_received",
+      "params": {
+        "query": "has:attachment subject:invoice"
+      }
+    },
+    {
+      "id": "extract_attachments",
+      "type": "extract_attachments",
+      "params": {
+        "source": "{{trigger.attachments}}",
+        "file_types": ""
+      }
+    },
+    {
+      "id": "save_to_drive",
+      "type": "drive_save",
+      "params": {
+        "file_name": "{{extract_attachments.first_name}}",
+        "content": "{{extract_attachments.first_content}}",
+        "mime_type": "application/pdf",
+        "folder_id": ""
+      }
+    },
+    {
+      "id": "notify_slack",
+      "type": "slack_message",
+      "params": {
+        "webhook_url": "{{env.SLACK_WEBHOOK_URL}}",
+        "text": "New email from {{trigger.from}}: {{trigger.subject}} (saved: {{save_to_drive.link}})",
+        "channel": ""
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "trigger",
+      "to": "extract_attachments"
+    },
+    {
+      "from": "extract_attachments",
+      "to": "save_to_drive"
+    },
+    {
+      "from": "save_to_drive",
+      "to": "notify_slack"
+    }
+  ]
+}

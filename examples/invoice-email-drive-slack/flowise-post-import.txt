@@ -1,0 +1,4 @@
+- Enable the schedule on the Start node (cron '*/5 * * * *').
+- agentAgentflow_0 ('Fetch Email'): connect a Gmail credential to the Gmail tool and pick the model.
+- toolAgentflow_0 (Save to Google Drive): connect the credential for the 'googleDriveTool' tool.
+- httpAgentflow_0 (Slack Message): create the Flowise variable used in its URL ({{ $vars.SLACK_WEBHOOK_URL }}) under Variables.

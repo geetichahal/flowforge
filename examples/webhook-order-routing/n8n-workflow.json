@@ -1,0 +1,131 @@
+{
+  "name": "When a webhook receives an order, if the amount is over 100 post it to http://12",
+  "nodes": [
+    {
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "flowforge-hook",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "webhookId": "2ded8221-f548-5573-ac1f-4d3c59949087",
+      "id": "03046787-a0d0-5052-9612-fcd4276ae8eb",
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "name": "If amount is over 100",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "ace39d04-1656-50db-aff6-29cc55132a2c",
+              "leftValue": "={{ Number($('Webhook').item.json.body.amount) }}",
+              "rightValue": 100,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "001bc72f-9909-5900-9540-3c651b6c3cc0",
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "name": "HTTP Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8799/big-orders",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $('Webhook').item.json.body }}"
+      },
+      "id": "239ee085-eb53-5004-a3e2-8f500924c96b",
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "name": "HTTP Request 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8799/small-orders",
+        "options": {},
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $('Webhook').item.json.body }}"
+      },
+      "id": "246a5164-d1de-5218-b63b-7e469cc80e40",
+      "position": [
+        1200,
+        480
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "If amount is over 100",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If amount is over 100": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "generator": "FlowForge"
+  },
+  "tags": []
+}

@@ -1,0 +1,5 @@
+✓  1. trigger (webhook): mock POST /flowforge-hook received
+✓  2. check (condition): '250' greater_than '100' -> True
+✓  3. call_api (http_request): mock POST http://127.0.0.1:8799/big-orders -> 200
+·  4. call_api_2 (http_request): branch not taken
+RESULT: completed

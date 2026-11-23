@@ -1,0 +1,1 @@
+- Webhook URL after saving: <FLOWISE_URL>/api/v1/webhook/<flowId> (POST). Enable webhook auth on the Start node for production.

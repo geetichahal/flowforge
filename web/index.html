@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FlowForge</title>
+<meta name="description" content="Describe an automation in plain English and get a Flowise flow, an n8n workflow and a Python script, validated and dry-run.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap">
+    <div class="brand">
+      <svg viewBox="0 0 28 28" aria-hidden="true">
+        <rect x="1" y="9" width="8" height="10" rx="2" fill="var(--trigger)"/>
+        <rect x="19" y="2" width="8" height="10" rx="2" fill="var(--action)"/>
+        <rect x="19" y="16" width="8" height="10" rx="2" fill="var(--logic)"/>
+        <path d="M9 14h5M14 14V7h5M14 14v7h5" stroke="var(--muted)" stroke-width="1.6" fill="none"/>
+      </svg>
+      <h1>FlowForge</h1>
+    </div>
+    <div class="engine" id="engine" role="status"><span class="dot busy"></span><span id="engine-text">Connecting…</span></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="intro">
+    <h2>Say what should happen. Get it as a Flowise flow, an n8n workflow and a Python script.</h2>
+    <p>FlowForge plans the automation, generates all three from one plan, checks them, fixes its own mistakes, and dry-runs the result against mock email, Drive, Sheets and Slack. Nothing touches a real account.</p>
+  </section>
+
+  <form class="composer" id="composer">
+    <label class="big" for="request">Automation request</label>
+    <textarea id="request" spellcheck="true">when I get an email with an invoice attached, save it to Drive and ping me on Slack</textarea>
+    <div class="examples" id="examples" aria-label="Example requests"></div>
+    <div class="controls">
+      <div class="field">
+        <label for="mode">Planner</label>
+        <select id="mode">
+          <option value="auto">Auto (LLM if available)</option>
+          <option value="llm">LLM (Ollama)</option>
+          <option value="template">Rule-based</option>
+        </select>
+      </div>
+      <div class="field">
+        <input type="checkbox" id="fault">
+        <label for="fault">Inject a fault to watch it self-correct</label>
+      </div>
+      <button class="primary" id="go" type="submit" disabled>Generate</button>
+    </div>
+  </form>
+
+  <div class="status" id="status" aria-live="polite"></div>
+
+  <div class="results" id="results">
+    <div class="stack">
+      <section class="panel">
+        <header><h3>Plan</h3><span class="sub" id="plan-name"></span></header>
+        <div class="diagram" id="diagram"><div class="loading">The flow diagram appears here.</div></div>
+        <div class="legend">
+          <span style="--c: var(--trigger)">Trigger</span>
+          <span style="--c: var(--action)">Action</span>
+          <span style="--c: var(--logic)">Logic</span>
+        </div>
+      </section>
+      <section class="panel">
+        <header><h3>Self-correction</h3><span class="sub">plan → validate → revise, up to 3 attempts</span></header>
+        <div class="body"><ol class="attempts" id="attempts"></ol></div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <div class="tabs" role="tablist" id="tabs">
+        <button class="tab" role="tab" id="tab-flowise" aria-controls="panel-flowise" aria-selected="true">Flowise</button>
+        <button class="tab" role="tab" id="tab-n8n" aria-controls="panel-n8n" aria-selected="false">n8n</button>
+        <button class="tab" role="tab" id="tab-python" aria-controls="panel-python" aria-selected="false">Python</button>
+        <button class="tab" role="tab" id="tab-checks" aria-controls="panel-checks" aria-selected="false">Checks</button>
+        <button class="tab" role="tab" id="tab-sim" aria-controls="panel-sim" aria-selected="false">Dry run</button>
+        <button class="tab" role="tab" id="tab-json" aria-controls="panel-json" aria-selected="false">Plan JSON</button>
+      </div>
+      <div class="tabpanel" role="tabpanel" id="panel-flowise" aria-labelledby="tab-flowise"></div>
+      <div class="tabpanel" role="tabpanel" id="panel-n8n" aria-labelledby="tab-n8n" hidden></div>
+      <div class="tabpanel" role="tabpanel" id="panel-python" aria-labelledby="tab-python" hidden></div>
+      <div class="tabpanel" role="tabpanel" id="panel-checks" aria-labelledby="tab-checks" hidden></div>
+      <div class="tabpanel" role="tabpanel" id="panel-sim" aria-labelledby="tab-sim" hidden></div>
+      <div class="tabpanel" role="tabpanel" id="panel-json" aria-labelledby="tab-json" hidden></div>
+    </section>
+  </div>
+</main>
+<footer class="wrap">FlowForge · Bennett University capstone · generates for Flowise 3.1 (AgentFlow v2), n8n and Python 3.</footer>
+<script src="app.js"></script>
+</body>
+</html>

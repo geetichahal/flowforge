@@ -1,0 +1,58 @@
+{
+  "name": "When a webhook receives an order, if the amount is over 100 post it to http://12",
+  "request": "when a webhook receives an order, if the amount is over 100 post it to http://127.0.0.1:8799/big-orders otherwise post it to http://127.0.0.1:8799/small-orders",
+  "nodes": [
+    {
+      "id": "trigger",
+      "type": "webhook",
+      "params": {
+        "path": "flowforge-hook",
+        "method": "POST"
+      }
+    },
+    {
+      "id": "check",
+      "type": "condition",
+      "params": {
+        "field": "{{trigger.body.amount}}",
+        "operator": "greater_than",
+        "value": "100"
+      },
+      "label": "If amount is over 100"
+    },
+    {
+      "id": "call_api",
+      "type": "http_request",
+      "params": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8799/big-orders",
+        "body": "{{trigger.body}}"
+      }
+    },
+    {
+      "id": "call_api_2",
+      "type": "http_request",
+      "params": {
+        "method": "POST",
+        "url": "http://127.0.0.1:8799/small-orders",
+        "body": "{{trigger.body}}"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "trigger",
+      "to": "check"
+    },
+    {
+      "from": "check",
+      "to": "call_api",
+      "branch": "true"
+    },
+    {
+      "from": "check",
+      "to": "call_api_2",
+      "branch": "false"
+    }
+  ]
+}

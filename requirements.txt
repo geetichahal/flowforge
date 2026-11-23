@@ -1,0 +1,8 @@
+# engine core is standard library only; these are for the API, dashboard, tests,
+# and for generated scripts' live mode (requests)
+fastapi>=0.110
+uvicorn>=0.29
+gradio>=4.40
+requests>=2.31
+pytest>=8
+httpx>=0.27
