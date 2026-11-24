@@ -1,0 +1,58 @@
+{
+  "name": "When a webhook receives an order, if the amount is over 100 post to slack otherw",
+  "request": "when a webhook receives an order, if the amount is over 100 post to slack otherwise add a row to the spreadsheet",
+  "nodes": [
+    {
+      "id": "trigger",
+      "type": "webhook",
+      "params": {
+        "path": "flowforge-hook",
+        "method": "POST"
+      }
+    },
+    {
+      "id": "check",
+      "type": "condition",
+      "params": {
+        "field": "{{trigger.body.amount}}",
+        "value": "100",
+        "operator": "greater_than"
+      },
+      "label": "If amount is over 100"
+    },
+    {
+      "id": "notify_slack",
+      "type": "slack_message",
+      "params": {
+        "webhook_url": "{{env.SLACK_WEBHOOK_URL}}",
+        "text": "Webhook received: {{trigger.body}}",
+        "channel": ""
+      }
+    },
+    {
+      "id": "append_row",
+      "type": "sheets_append",
+      "params": {
+        "spreadsheet_id": "{{env.SHEET_ID}}",
+        "range": "Sheet1!A1",
+        "values": "{{trigger.body.amount}}"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "trigger",
+      "to": "check"
+    },
+    {
+      "from": "check",
+      "to": "notify_slack",
+      "branch": "true"
+    },
+    {
+      "from": "check",
+      "to": "append_row",
+      "branch": "false"
+    }
+  ]
+}

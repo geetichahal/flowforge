@@ -1,0 +1,5 @@
+✓  1. trigger (webhook): mock POST /flowforge-hook received
+✓  2. check (condition): '250' greater_than '100' -> True
+✓  3. notify_slack (slack_message): posted to mock slack
+·  4. append_row (sheets_append): branch not taken
+RESULT: completed

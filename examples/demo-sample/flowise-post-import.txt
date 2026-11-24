@@ -1,0 +1,3 @@
+- Webhook URL after saving: <FLOWISE_URL>/api/v1/webhook/<flowId> (POST). Enable webhook auth on the Start node for production.
+- httpAgentflow_0 (Slack Message): create the Flowise variable used in its URL ({{ $vars.SLACK_WEBHOOK_URL }}) under Variables.
+- toolAgentflow_0 (Append to Google Sheet): connect the credential for the 'googleSheetsTool' tool.

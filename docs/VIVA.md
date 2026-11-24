@@ -158,10 +158,12 @@ Each team member should prepare their own answer to this. Pick one module you ca
 ## 7. Five-minute live demo script
 
 ```bash
-cd ~/flowforge
-.venv/bin/python -m pytest -q                 # "50 tests, all passing"
-.venv/bin/python -m flowforge serve           # open http://127.0.0.1:8000
+~/flowforge/tools/demo_start.sh               # starts Ollama, Flowise and FlowForge, opens http://127.0.0.1:8000
+cd ~/flowforge && .venv/bin/python -m pytest -q   # in a second terminal: "50 tests, all passing"
 ```
+
+The finished output of steps 1–5 is saved in `examples/demo-sample/` (plan, Flowise flow, n8n workflow,
+Python script, validation, dry-run trace), so you can show it even if something fails live.
 
 1. Type: *when a webhook receives an order, if the amount is over 100 post to slack otherwise add a row to the spreadsheet*. Click Generate.
 2. **Plan tab:** point to the trigger, the condition with true/false branches, and `{{trigger.body.amount}}`.

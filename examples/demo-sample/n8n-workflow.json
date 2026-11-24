@@ -1,0 +1,162 @@
+{
+  "name": "When a webhook receives an order, if the amount is over 100 post to slack otherw",
+  "nodes": [
+    {
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "flowforge-hook",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "webhookId": "2ded8221-f548-5573-ac1f-4d3c59949087",
+      "id": "482b2ed0-b56e-506a-9747-90b7e8f8bc3d",
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "name": "If amount is over 100",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "9a942ff1-3762-54bb-8043-fd2e0fadcaa6",
+              "leftValue": "={{ Number($('Webhook').item.json.body.amount) }}",
+              "rightValue": 100,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c9535ea0-b8c1-5817-a8f1-8922037adaa1",
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "name": "Slack Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "keypair",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "=Webhook received: {{ $('Webhook').item.json.body }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "456d3647-f1a8-547f-b042-e303c18bdaa1",
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "name": "Append to Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "col_1": "={{ $('Webhook').item.json.body.amount }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "col_1",
+              "displayName": "col_1",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ab0efd43-a2cd-5d69-a23a-af58808b84b1",
+      "position": [
+        1200,
+        480
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "If amount is over 100",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If amount is over 100": {
+      "main": [
+        [
+          {
+            "node": "Slack Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Append to Google Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "generator": "FlowForge"
+  },
+  "tags": []
+}
