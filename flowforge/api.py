@@ -77,10 +77,12 @@ def flowise_target(url: str, api_key: str, request: Request) -> tuple[str, str |
     """Where to deploy. Local requests may fall back to FLOWISE_URL / FLOWISE_API_KEY set on this machine;
     requests from the internet must bring their own and pass the network guard."""
     public = is_public_request(request)
-    base = (url or "").strip() or ("" if public else os.environ.get("FLOWISE_URL", "http://localhost:3000"))
+    from . import flowise_client
+    base = (url or "").strip() or ("" if public else flowise_client.base_url())
     if not base:
         raise HTTPException(400, "Enter your Flowise URL")
-    key = (api_key or "").strip() or (None if public else os.environ.get("FLOWISE_API_KEY"))
+    # the saved key (env or ~/.flowforge/config.json) is only ever used for requests from this machine
+    key = (api_key or "").strip() or (None if public else flowise_client.configured_key())
     check_push_target(base, public)
     return base, key
 

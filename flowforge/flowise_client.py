@@ -9,16 +9,31 @@ import json
 import os
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+
+CONFIG_PATH = Path.home() / ".flowforge" / "config.json"  # private, chmod 600; never committed
+
+
+def _config() -> dict:
+    try:
+        return json.loads(CONFIG_PATH.read_text())
+    except (OSError, ValueError):
+        return {}
 
 
 def base_url() -> str:
-    return os.environ.get("FLOWISE_URL", "http://localhost:3000").rstrip("/")
+    return (os.environ.get("FLOWISE_URL") or _config().get("flowise_url") or "http://localhost:3000").rstrip("/")
+
+
+def configured_key() -> str | None:
+    return os.environ.get("FLOWISE_API_KEY") or _config().get("flowise_api_key")
 
 
 def _request(method: str, path: str, body: dict | None = None, timeout: float = 30,
              base: str | None = None, api_key: str | None = None) -> dict:
     headers = {"Content-Type": "application/json"}
-    key = api_key or os.environ.get("FLOWISE_API_KEY")
+    key = api_key or configured_key()
     if key:
         headers["Authorization"] = f"Bearer {key}"
     req = urllib.request.Request((base or base_url()).rstrip("/") + path, method=method, headers=headers,
