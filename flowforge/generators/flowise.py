@@ -24,7 +24,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from .. import catalog
-from ..plan import node_map, refs_in, substitute, topo_order, trigger_of
+from ..plan import REF_RE, node_map, refs_in, substitute, topo_order, trigger_of
 
 SPECS_PATH = Path(__file__).resolve().parent.parent / "data" / "flowise_node_specs.json"
 
@@ -37,6 +37,7 @@ MODEL_PLACEHOLDER_NOTE = "pick a chat model in the canvas (ChatOllama works loca
 OLLAMA_MODEL = "chatOllama"
 
 X_STEP, Y_ROW = 260, 120
+REF_ONLY = REF_RE
 
 
 @lru_cache(maxsize=1)
@@ -155,9 +156,12 @@ class FlowiseBuilder:
             return r(path)
         return substitute(value, fn)
 
-    def model_config(self, prefix: str, model: str = "qwen3:4b") -> dict:
+    def model_config(self, prefix: str, model: str = "qwen3:4b-instruct") -> dict:
+        # think=False and a long keepAlive: answers come back clean and the model stays loaded
         return {"modelName": model, "baseUrl": "http://localhost:11434", "temperature": 0.2,
-                "streaming": True, f"{prefix}Model": OLLAMA_MODEL}
+                "streaming": True, "think": False, "keepAlive": "24h",
+                "numCtx": 8192,  # room for tool results; fits an 8 GB Mac's GPU (Ollama default is 4096)
+                f"{prefix}Model": OLLAMA_MODEL}
 
     # -- build --------------------------------------------------------------
     def build(self) -> dict:
@@ -346,22 +350,50 @@ class FlowiseBuilder:
             ref_content(node)
             return node, node
         if t in ("slack_message", "discord_message", "teams_message", "http_request"):
+            # JSON bodies whose values contain references are built by a small Custom Function with
+            # JSON.stringify, so quotes or objects inside the data can never break the JSON.
+            fields = None
+            if t == "http_request":
+                raw_body = n["params"].get("body", "")
+                exact_ref = isinstance(raw_body, str) and REF_ONLY.fullmatch(raw_body.strip() or "x")
+                if isinstance(raw_body, dict):
+                    fields = raw_body
+                elif isinstance(raw_body, str) and raw_body.strip() and not exact_ref:
+                    try:
+                        parsed = json.loads(raw_body)
+                        fields = parsed if isinstance(parsed, dict) else None
+                    except ValueError:
+                        fields = None
+            else:
+                key = "content" if t == "discord_message" else "text"
+                fields = {key: n["params"].get(key, "")}
+            builder = None
+            if fields is not None and any(refs_in(v) for v in fields.values()):
+                builder = self.add("customFunctionAgentflow", f"{label}: format message", row)
+                b_in = builder["data"]["inputs"]
+                b_in["customFunctionInputVariables"] = [
+                    {"variableName": f"f{i}", "variableValue": self.render(v) if isinstance(v, str) else json.dumps(v)}
+                    for i, v in enumerate(fields.values())]
+                b_in["customFunctionJavascriptFunction"] = (
+                    "return JSON.stringify({" + ", ".join(f"{json.dumps(k)}: $f{i}" for i, k in enumerate(fields)) + "});")
             node = self.add("httpAgentflow", label, row)
+            if builder is not None:
+                self.connect(builder, node)
             inp = node["data"]["inputs"]
+            body_value = ("{{ " + builder["id"] + " }}") if builder is not None else None
             if t == "http_request":
                 inp["method"] = p.get("method", "GET")
                 inp["url"] = p.get("url", "")
                 body = p.get("body", "")
                 if body:
                     inp["bodyType"] = "json"
-                    inp["body"] = body if isinstance(body, str) else json.dumps(body)
+                    inp["body"] = body_value or (body if isinstance(body, str) else json.dumps(body))
             else:
-                key = "content" if t == "discord_message" else "text"
                 inp["method"] = "POST"
                 inp["url"] = p.get("webhook_url", "")
                 inp["headers"] = [{"key": "Content-Type", "value": "application/json"}]
                 inp["bodyType"] = "json"
-                inp["body"] = json.dumps({key: p.get(key, "")})
+                inp["body"] = body_value or json.dumps({k: self.render(v) for k, v in fields.items()})
                 self.post_import.append(f"{node['id']} ({label}): create the Flowise variable used in its URL "
                                         f"({p.get('webhook_url', '')}) under Variables.")
             inp["responseType"] = "json"
@@ -369,6 +401,8 @@ class FlowiseBuilder:
             self.ref_map[nid] = lambda path: ("{{ " + fid + ".output.http.status }}" if path[:1] == ["status"]
                                               else "{{ " + fid + ".output.http.data }}" if path[:1] == ["body"]
                                               else "{{ " + fid + " }}")
+            if builder is not None:
+                return builder, node
             return node, node
         if t == "condition":
             node = self.add("conditionAgentflow", label, row)
@@ -409,6 +443,23 @@ class FlowiseBuilder:
             inp["llmUserMessage"] = html(p.get("text", ""))
             ref_content(node)
             return node, node
+        if t == "ai_agent":
+            node = self.add("agentAgentflow", label, row)
+            inp = node["data"]["inputs"]
+            inp["agentModel"] = OLLAMA_MODEL
+            inp["agentModelConfig"] = self.model_config("agent", n["params"].get("model", "qwen3:4b-instruct"))
+            inp["agentMessages"] = [{"role": "system", "content": html(
+                p.get("instruction", "") + "\nUse your tools whenever they help. Answer clearly and briefly.")}]
+            tools = [x.strip() for x in str(n["params"].get("tools", "")).split(",") if x.strip()]
+            inp["agentTools"] = [cfg for x in tools if (cfg := self._agent_tool(x, n["params"], nid))]
+            chat = (self.plan["nodes"][0]["type"] == "manual" and
+                    str(n["params"].get("input", "")).strip() in ("", "{{trigger.input}}"))
+            inp["agentEnableMemory"] = chat  # a chat agent remembers the conversation
+            if not chat:
+                inp["agentUserMessage"] = html(p.get("input", ""))
+            inp["agentReturnResponseAs"] = "userMessage"
+            ref_content(node)
+            return node, node
         if t == "notify":
             node = self.add("directReplyAgentflow", label, row)
             node["data"]["inputs"]["directReplyMessage"] = html(p.get("message", ""))
@@ -439,6 +490,32 @@ class FlowiseBuilder:
                                                 "(n8n and Python outputs still include it).")
         self._passthrough(nid)
         return note, None
+
+    def _agent_tool(self, name: str, params: dict, nid: str) -> dict | None:
+        base = {"agentSelectedToolRequiresHumanInput": ""}
+        if name == "calculator":
+            return {**base, "agentSelectedTool": "calculator", "agentSelectedToolConfig": {"agentSelectedTool": "calculator"}}
+        if name == "datetime":
+            return {**base, "agentSelectedTool": "currentDateTime",
+                    "agentSelectedToolConfig": {"agentSelectedTool": "currentDateTime"}}
+        if name == "web":
+            return {**base, "agentSelectedTool": "webScraperTool", "agentSelectedToolConfig": {
+                "scrapeMode": "recursive", "maxDepth": 1, "maxPages": 1, "timeoutS": 30,
+                "description": "Read the text of a web page. Input: the page URL.", "agentSelectedTool": "webScraperTool"}}
+        if name == "arxiv":
+            return {**base, "agentSelectedTool": "arxiv", "agentSelectedToolConfig": {
+                "arxivName": "arxiv_search", "arxivDescription": "Search Arxiv for research papers by keywords.",
+                "topKResults": 3, "agentSelectedTool": "arxiv"}}
+        if name == "http":
+            url = params.get("url") or ""
+            if not url:
+                self.warn(nid, "W_FLOWISE_APPROX", "The 'http' tool needs a fixed API URL (add a url to the request); skipped.")
+                return None
+            return {**base, "agentSelectedTool": "requestsGet", "agentSelectedToolConfig": {
+                "requestsGetUrl": html(url), "requestsGetName": "call_api",
+                "requestsGetDescription": f"GET {url} and return the response.", "agentSelectedTool": "requestsGet"}}
+        self.warn(nid, "W_FLOWISE_APPROX", f"Unknown agent tool '{name}' skipped.")
+        return None
 
     def _passthrough(self, nid: str) -> None:
         """An unsupported step is bypassed: its predecessors connect straight to its successors."""

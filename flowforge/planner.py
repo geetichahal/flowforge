@@ -91,7 +91,27 @@ ACTION_PATTERNS: list[tuple[str, str]] = [
     ("http_request", r"\b(?:call|hit|fetch|post (?:it )?to|send (?:it )?to|get)\b[^.,;]{0,40}\b(?:api|endpoint|url|https?://\S+)|\bfrom https?://\S+"),
     ("log_message", r"\blog\b(?![^.,;]{0,30}\b(?:sheet|spreadsheet)\b)"),
     ("notify", r"\b(?:notify me|let me know|tell me|reply with|respond with|confirm)\b"),
+    ("ai_agent", r"\b(?:agent|assistant|chat ?bot|tutor|advisor|answer (?:my |student |customer |user )?questions|"
+                 r"research|explain|help (?:me|students|users|people)|solve|plan my|recommend)\b"),
 ]
+
+AGENT_TOOL_CUES = [
+    ("calculator", r"\b(?:math|calculat\w*|percent\w*|%|convert\w*|budget|cost|price|interest|grade|marks|gpa|loan|emi|sum|average)\b"),
+    ("datetime", r"\b(?:date|time|today|tomorrow|deadline|schedule|day|week|month|year|age|remind)\b"),
+    ("web", r"\b(?:web|website|page|url|link|article|news|wikipedia|online|internet|look up|search|latest|current)\b"),
+    ("arxiv", r"\b(?:paper|papers|research|arxiv|academic|literature|journal)\b"),
+]
+
+
+def agent_tools_for(text: str) -> str:
+    tools = [name for name, rx in AGENT_TOOL_CUES if re.search(rx, text, re.I)]
+    for default in ("calculator", "datetime"):  # cheap, broadly useful
+        if default not in tools:
+            tools.append(default)
+    if re.search(r"https?://", text):
+        tools.append("http")
+    order = ["calculator", "datetime", "web", "arxiv", "http"]
+    return ",".join(sorted(set(tools), key=order.index))
 
 COND_RE = re.compile(
     r"\b(?:only )?if\s+(?:the\s+|its\s+|their\s+)?(?P<field>[\w ]+?)\s+"
@@ -207,7 +227,7 @@ def _find_actions(segment: str) -> list[tuple[int, str, re.Match]]:
     # Data sources run before the steps that use their data ("post the weather from <url> to slack").
     def stage(h):
         typ, m = h[1], h[2]
-        if typ in ("sheets_read", "drive_list"):
+        if typ in ("sheets_read", "drive_list", "ai_agent"):  # these produce the content later steps use
             return 0
         if typ == "http_request" and not re.search(r"\bpost\b|\bsend\b", m.group(0), re.I):
             return 0
@@ -408,7 +428,7 @@ class _Builder:
                 instruction = f"Translate this into {tr.group(1).title()}. Reply with the translation only."
             if re.search(r"classify", seg, re.I):
                 instruction = "Classify this as one of: urgent, normal, spam. Answer with one word."
-            i = self.add("llm_summarize", {"text": text, "instruction": instruction, "model": llm.model()}, base="summarize")
+            i = self.add("llm_summarize", {"text": text, "instruction": instruction, "model": llm.agent_model()}, base="summarize")
             self.last_content = f"{{{{{i}.summary}}}}"
             return i
         if typ == "create_task":
@@ -445,11 +465,31 @@ class _Builder:
             i = self.add("http_request", params, base="call_api")
             self.last_content = f"{{{{{i}.body}}}}"
             return i
+        if typ == "ai_agent":
+            i = self.add("ai_agent", self.agent_params(seg), base="agent")
+            self.last_content = f"{{{{{i}.answer}}}}"
+            return i
         if typ == "log_message":
             return self.add("log_message", {"message": self.message_text()}, base="log")
         if typ == "notify":
             return self.add("notify", {"message": "Done. " + self.message_text()}, base="notify")
         return None
+
+    def agent_params(self, seg: str) -> dict:
+        task = re.sub(r"\s+", " ", self.request.strip().rstrip("."))
+        chat = self.trigger_type == "manual"
+        params = {
+            "instruction": (f"You are an AI agent built for this purpose: {task}. "
+                            "Work step by step, use your tools for facts, numbers, dates and web pages, "
+                            "and say so when you are not sure."),
+            "input": "{{trigger.input}}" if chat else (self.last_content or f"{task}\n\nContext: {self.event_text()}"),
+            "tools": agent_tools_for(self.request),
+            "model": llm.agent_model(),
+        }
+        url = re.search(r"https?://[^\s,;]+", self.request)
+        if url:
+            params["url"] = url.group(0).rstrip(".")
+        return params
 
     def chain(self, segment: str, start: str | None, branch: str | None) -> str | None:
         """Add the actions found in `segment` as a chain after `start`. Returns the last id."""
@@ -499,7 +539,9 @@ def template_plan(request: str) -> dict:
             nid = b.add("notify", {"message": "Condition matched: " + b.event_text()}, base="notify")
             b.link(cid, nid, "true")
     if len(b.nodes) == 1:
-        nid = b.add("notify", {"message": "Automation ran. " + b.event_text()}, base="notify")
+        # Nothing automation-shaped was found: the request is a task for an AI agent
+        # (e.g. "help students plan their study week"), so build one that can do it.
+        nid = b.add("ai_agent", b.agent_params(request), base="agent")
         b.link("trigger", nid)
 
     name = re.sub(r"\s+", " ", request.strip().rstrip("."))

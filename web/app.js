@@ -16,6 +16,8 @@ const ENGINE_FILES = [
   "generators/python_gen.py", "data/flowise_node_specs.json",
 ];
 const EXAMPLES = [
+  "a study assistant that helps engineering students with calculations, deadlines and reading web articles",
+  "what is the EMI on a 5 lakh loan at 9% for 3 years",
   "when I get an email with an invoice attached, save it to Drive and ping me on Slack",
   "when someone submits the contact form, email them a thank-you email and add a row to the spreadsheet",
   "every monday at 9am read the sales sheet, summarize it and email me the summary",
@@ -200,7 +202,7 @@ function renderDiagram(plan) {
   for (const id of order) {
     const n = byId[id];
     const color = TRIGGERS.has(n.type) ? "var(--trigger)" : LOGIC.has(n.type) ? "var(--logic)" : "var(--action)";
-    const label = n.label || n.type.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+    const label = n.label || n.type.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()).replace(/^Ai /, "AI ");
     mk("rect", { x: x(id), y: y(id), width: W, height: H, rx: 8, fill: "var(--surface)", stroke: color, "stroke-width": "1.5" });
     mk("rect", { x: x(id), y: y(id), width: 6, height: H, rx: 3, fill: color });
     const t = mk("text", { x: x(id) + 16, y: y(id) + 24, "font-size": "13", "font-weight": "600", fill: "var(--ink)" }, label.length > 25 ? label.slice(0, 24) + "…" : label);
@@ -248,10 +250,13 @@ function renderFlowise(r) {
   if (!r.ok) return p.replaceChildren(el("p", { class: "muted", text: "No Flowise flow: the plan did not pass validation." }));
   const text = JSON.stringify(r.flowise.export, null, 2);
   const warns = warningsFor(r, "flowise");
-  const note = el("div", { class: "note" },
-    el("strong", {}, "A starting canvas, not a one-click automation. "),
-    "Import it in Flowise (Agentflows → Import), then:",
-    el("ul", {}, r.flowise.post_import.map((s) => el("li", { text: s }))));
+  const note = r.flowise.post_import.length
+    ? el("div", { class: "note" },
+        el("strong", {}, "Needs a little setup in Flowise. "),
+        "Deploy below, or import the file (Agentflows → Import), then:",
+        el("ul", {}, r.flowise.post_import.map((s) => el("li", { text: s }))))
+    : el("div", { class: "note" }, el("strong", {}, "No extra setup needed. "),
+        "It runs on your local model. Deploy below, or import the file (Agentflows → Import).");
   const kids = [toolbar("AgentFlow v2 export for Flowise 3.1", slugify(r.plan.name) + "-flowise.json", text), note];
   if (warns.length) kids.push(el("ul", { class: "issues" }, warns.map(issueItem)));
   kids.push(codeBlock(text));
@@ -259,29 +264,103 @@ function renderFlowise(r) {
   p.replaceChildren(...kids);
 }
 
+function store(key, value) {
+  try { if (value === undefined) return localStorage.getItem(key) || ""; localStorage.setItem(key, value); } catch (_) { return ""; }
+}
+
 function pushForm(r) {
-  const url = el("input", { id: "fw-url", value: "http://localhost:3000", "aria-label": "Flowise URL" });
-  const key = el("input", { id: "fw-key", type: "password", placeholder: "Flowise API key", "aria-label": "Flowise API key" });
-  const out = el("div", { class: "muted" });
-  const btn = el("button", { class: "secondary", type: "button" }, "Create in Flowise");
+  const flowData = r.flowise.export.AgentFlowV2[0].flowData;
+  const varNames = [...new Set([...flowData.matchAll(/\{\{\s*\$vars\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g)].map((m) => m[1]))];
+  const url = el("input", { id: "fw-url", value: store("flowforge-flowise-url") || "http://localhost:3000", "aria-label": "Flowise URL" });
+  const key = el("input", { id: "fw-key", type: "password", placeholder: engine.remote ? "Flowise API key" : "Flowise API key (optional if set on the server)", "aria-label": "Flowise API key" });
+  const vars = varNames.map((n) => el("input", { id: "var-" + n, placeholder: n + " value (e.g. your Slack webhook URL)", "aria-label": n }));
+  const isChat = r.plan.nodes[0] && r.plan.nodes[0].type === "manual";
+  const testQ = isChat ? el("input", { id: "fw-test", placeholder: "Test message (optional), e.g. a question your professor might ask", "aria-label": "Test message" }) : null;
+  const out = el("div", { class: "deploy-out" });
+  const btn = el("button", { class: "primary", type: "button" }, "Deploy & run in Flowise");
   btn.addEventListener("click", async () => {
-    btn.disabled = true; out.textContent = "Creating…";
+    store("flowforge-flowise-url", url.value);
+    btn.disabled = true; btn.textContent = "Deploying…";
+    out.replaceChildren(el("p", { class: "muted", text: "Creating the flow, connecting it, and running a test. An agent's first answer can take up to a minute while the model loads." }));
+    const variables = {};
+    varNames.forEach((n, i) => { if (vars[i].value.trim()) variables[n] = vars[i].value.trim(); });
     try {
-      const res = await fetch(api("flowise/push-to"), {
+      const res = await fetch(api("flowise/deploy"), {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ export: r.flowise.export, confirm: true, url: url.value, api_key: key.value }),
+        body: JSON.stringify({ plan: r.plan, url: url.value, api_key: key.value, variables, confirm: true,
+                               test_input: testQ && testQ.value.trim() ? testQ.value.trim() : null }),
       });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.detail || res.statusText);
-      out.replaceChildren("Created. ", el("a", { href: j.url, target: "_blank", rel: "noopener" }, "Open it on the Flowise canvas"));
-    } catch (e) { out.textContent = "Could not create the flow: " + e.message; }
-    btn.disabled = false;
+      const d = await res.json();
+      if (!res.ok) throw new Error(typeof d.detail === "string" ? d.detail : JSON.stringify(d.detail));
+      out.replaceChildren(...deployResult(d, url.value, key.value));
+    } catch (e) {
+      out.replaceChildren(el("p", { class: "error-text", text: "Could not deploy: " + e.message }));
+    }
+    btn.disabled = false; btn.textContent = "Deploy & run in Flowise";
   });
-  const hint = engine.health && engine.health.public
-    ? el("div", { class: "muted", text: "The public server can only reach a Flowise with a public address. For a Flowise on your own machine, run FlowForge locally or import the file." })
-    : null;
-  return el("div", { class: "push" }, el("strong", {}, "Send straight to your Flowise"),
-    el("div", { class: "row" }, url, key, btn), hint, out);
+  return el("div", { class: "push" },
+    el("strong", {}, "Deploy to your Flowise and run it"),
+    el("p", { class: "muted", text: "Creates the flow in your Flowise, connects the local model, variables and any credentials you saved in Flowise, then runs it once and shows the result." }),
+    el("div", { class: "row" }, url, key),
+    vars.length ? el("div", { class: "row" }, vars) : null,
+    testQ ? el("div", { class: "row" }, testQ) : null,
+    el("div", { class: "row" }, btn),
+    engine.health && engine.health.public
+      ? el("p", { class: "muted", text: "Through the public link, FlowForge can only reach a Flowise with a public address. On your own Mac, open http://127.0.0.1:8000 to deploy into a local Flowise." })
+      : null,
+    out);
+}
+
+function deployResult(d, flowiseUrl, apiKey) {
+  const kids = [
+    el("ul", { class: "steps" }, d.steps.map((s) => el("li", { class: s.ok ? "ok" : "err" },
+      el("span", { class: "mark" }, s.ok ? "✓" : "!"), el("span", {}, el("b", { text: s.step + " " }), s.detail)))),
+  ];
+  if (d.todo.length) kids.push(el("div", { class: "note" }, el("strong", {}, "Still to do"), el("ul", {}, d.todo.map((t) => el("li", { text: t })))));
+  const run = d.run;
+  if (run && !run.skipped) {
+    kids.push(el("div", { class: "run " + (run.ok ? "ok" : "err") },
+      el("div", {}, el("span", { class: "pill " + (run.ok ? "ok" : "err") }, run.ok ? "Ran in Flowise" : "Run failed"), " ", el("span", { class: "muted", text: run.seconds + "s" })),
+      run.sent ? el("div", { class: "muted", text: "Sent: " + run.sent }) : null,
+      run.answer ? el("div", { class: "answer", text: run.answer }) : null,
+      run.error ? el("div", { class: "error-text", text: run.error }) : null,
+      run.nodes && run.nodes.length ? el("div", { class: "muted", text: run.nodes.map((n) => `${n.node}: ${n.status}`).join(" → ") }) : null));
+  } else if (run && run.skipped) {
+    kids.push(el("p", { class: "muted", text: run.detail }));
+  }
+  kids.push(el("p", {}, el("a", { href: d.url, target: "_blank", rel: "noopener" }, "Open it on the Flowise canvas")));
+  if (d.chat && run && run.ok) kids.push(chatBox(d.id, run.chat_id, flowiseUrl, apiKey));
+  return kids;
+}
+
+function chatBox(flowId, chatId, flowiseUrl, apiKey) {
+  const log = el("div", { class: "chatlog", "aria-live": "polite" });
+  const input = el("input", { id: "chat-input", placeholder: "Ask your agent anything…", "aria-label": "Message to the agent" });
+  const send = el("button", { class: "secondary", type: "submit" }, "Send");
+  const form = el("form", { class: "row" }, input, send);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const msg = input.value.trim();
+    if (!msg) return;
+    log.append(el("div", { class: "msg you", text: msg }));
+    input.value = ""; send.disabled = true;
+    const waiting = el("div", { class: "msg bot muted", text: "Thinking…" });
+    log.append(waiting);
+    try {
+      const res = await fetch(api("flowise/chat"), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flow_id: flowId, message: msg, chat_id: chatId, url: flowiseUrl, api_key: apiKey }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(typeof d.detail === "string" ? d.detail : res.statusText);
+      chatId = d.chat_id || chatId;
+      waiting.replaceWith(el("div", { class: "msg bot", text: d.answer + "  (" + d.seconds + "s)" }));
+    } catch (err) {
+      waiting.replaceWith(el("div", { class: "msg bot error-text", text: "Error: " + err.message }));
+    }
+    send.disabled = false; input.focus();
+  });
+  return el("div", { class: "chat" }, el("strong", {}, "Talk to your agent (running in Flowise)"), log, form);
 }
 
 function renderN8n(r) {

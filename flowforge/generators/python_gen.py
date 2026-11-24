@@ -137,6 +137,9 @@ def check(left, operator, right):
 
 MAIN = r'''
 
+MESSAGE = ""
+
+
 def run(trigger_output=None):
     """Execute the steps in order. A step runs when at least one incoming edge is live."""
     ctx = {}
@@ -160,10 +163,26 @@ def main():
     parser.add_argument("--payload", help="JSON file used as the trigger output (skips the trigger)")
     parser.add_argument("--serve", action="store_true", help="for webhook/form triggers: listen for requests")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8765")))
+    parser.add_argument("--chat", action="store_true", help="manual trigger: keep asking for messages until you type exit")
+    parser.add_argument("message", nargs="*", help="manual trigger: the input text")
     args = parser.parse_args()
+    global MESSAGE
+    MESSAGE = " ".join(args.message)
     print("Mode: " + ("DRY RUN (set FLOWFORGE_DRY_RUN=0 to run for real)" if DRY_RUN else "LIVE"))
     if args.serve:
         serve(args.port)
+        return
+    if args.chat:
+        while True:
+            try:
+                MESSAGE = input("you> ").strip()
+            except EOFError:
+                break
+            if MESSAGE.lower() in ("exit", "quit", ""):
+                break
+            ctx = run()
+            last = list(ctx.values())[-1]
+            print("bot> " + str(last.get("answer", last.get("message", json.dumps(last, default=str)))))
         return
     payload = None
     if args.payload:
@@ -232,7 +251,7 @@ def serve(port):
 
 BODIES: dict[str, str] = {
     "manual": '''
-        return {"input": " ".join(sys.argv[1:]) if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else p["input"]}
+        return {"input": MESSAGE or p["input"]}
     ''',
     "webhook": '''
         # Normally the payload arrives via --serve or --payload; this is the sample request.
@@ -404,6 +423,13 @@ BODIES: dict[str, str] = {
             "prompt": str(p["instruction"]) + "\\n\\n" + str(p["text"])}).json()
         return {"summary": res.get("response", "").strip()}
     ''',
+    "ai_agent": '''
+        if DRY_RUN:
+            print("  [dry-run] would ask the agent (" + p["model"] + "): " + repr(str(p["input"])[:80]))
+            return SAMPLE
+        return {"answer": run_agent(p["instruction"], str(p["input"]), p["model"],
+                                    [t.strip() for t in str(p["tools"]).split(",") if t.strip()], p.get("url", ""))}
+    ''',
     "create_task": '''
         if not approve("create Jira task " + repr(p["title"]) + " in project " + str(p["project"])):
             return SAMPLE
@@ -431,6 +457,89 @@ BODIES: dict[str, str] = {
     ''',
 }
 
+AGENT_RUNTIME = r'''
+
+# ---- agent: a small tool-calling loop over Ollama's /api/chat
+import ast
+import operator
+from datetime import datetime, timezone
+
+_OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,
+        ast.Pow: operator.pow, ast.Mod: operator.mod, ast.FloorDiv: operator.floordiv,
+        ast.USub: operator.neg, ast.UAdd: operator.pos}
+
+
+def _calc(expr):
+    """Evaluate arithmetic safely (numbers and + - * / ** % // only; no names, no calls)."""
+    def ev(n):
+        if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)):
+            return n.value
+        if isinstance(n, ast.BinOp) and type(n.op) in _OPS:
+            return _OPS[type(n.op)](ev(n.left), ev(n.right))
+        if isinstance(n, ast.UnaryOp) and type(n.op) in _OPS:
+            return _OPS[type(n.op)](ev(n.operand))
+        raise ValueError("only arithmetic is allowed")
+    return str(ev(ast.parse(str(expr).replace("^", "**"), mode="eval").body))
+
+
+def _web(url):
+    text = http("GET", url, headers={"User-Agent": "FlowForge-agent"}).text
+    text = re.sub(r"(?is)<(script|style).*?</\1>", " ", text)
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))[:4000]
+
+
+def _arxiv(query):
+    xml = http("GET", "http://export.arxiv.org/api/query", params={"search_query": "all:" + query, "max_results": 3}).text
+    titles = re.findall(r"<title>(.*?)</title>", xml, re.S)[1:]
+    summaries = re.findall(r"<summary>(.*?)</summary>", xml, re.S)
+    return "\n\n".join(t.strip() + ": " + s.strip()[:400] for t, s in zip(titles, summaries)) or "no results"
+
+
+AGENT_TOOLS = {
+    "calculator": ({"name": "calculator", "description": "Evaluate an arithmetic expression, e.g. 2480*0.15",
+                    "parameters": {"type": "object", "properties": {"expression": {"type": "string"}}, "required": ["expression"]}},
+                   lambda a, url: _calc(a.get("expression", ""))),
+    "datetime": ({"name": "current_datetime", "description": "Get the current date and time (UTC and local)",
+                  "parameters": {"type": "object", "properties": {}}},
+                 lambda a, url: datetime.now(timezone.utc).isoformat() + " UTC / local " + datetime.now().isoformat()),
+    "web": ({"name": "read_web_page", "description": "Read the text of a web page",
+             "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}},
+            lambda a, url: _web(a.get("url", ""))),
+    "http": ({"name": "call_api", "description": "GET the configured API and return its response",
+              "parameters": {"type": "object", "properties": {}}},
+             lambda a, url: http("GET", url).text[:4000]),
+    "arxiv": ({"name": "arxiv_search", "description": "Search Arxiv research papers",
+               "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+              lambda a, url: _arxiv(a.get("query", ""))),
+}
+
+
+def run_agent(instruction, message, model, tools, url="", max_steps=6):
+    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    chosen = {AGENT_TOOLS[t][0]["name"]: AGENT_TOOLS[t] for t in tools if t in AGENT_TOOLS}
+    messages = [{"role": "system", "content": instruction + "\nUse your tools whenever they help. Answer briefly."},
+                {"role": "user", "content": message}]
+    for _ in range(max_steps):
+        res = http("POST", host + "/api/chat", json={
+            "model": model, "messages": messages, "stream": False, "think": False, "options": {"num_ctx": 8192},
+            "tools": [{"type": "function", "function": spec} for spec, _ in chosen.values()]}).json()
+        msg = res.get("message", {})
+        messages.append(msg)
+        calls = msg.get("tool_calls") or []
+        if not calls:
+            return re.sub(r"(?s)<think>.*?</think>", "", msg.get("content", "")).strip()
+        for call in calls:
+            fn = call.get("function", {})
+            name, args = fn.get("name"), fn.get("arguments") or {}
+            try:
+                result = chosen[name][1](args, url) if name in chosen else "unknown tool"
+            except Exception as exc:
+                result = "tool error: " + str(exc)
+            print("  agent used " + str(name) + "(" + json.dumps(args)[:80] + ")")
+            messages.append({"role": "tool", "content": str(result)})
+    return "Stopped after " + str(max_steps) + " tool steps without a final answer."
+'''
+
 ENV_HINTS = {
     "email_received": ["GOOGLE_ACCESS_TOKEN"], "send_email": ["GOOGLE_ACCESS_TOKEN"],
     "sheets_append": ["GOOGLE_ACCESS_TOKEN"], "sheets_read": ["GOOGLE_ACCESS_TOKEN"],
@@ -439,6 +548,7 @@ ENV_HINTS = {
     "sms_message": ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER"],
     "create_task": ["JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN"],
     "llm_summarize": ["OLLAMA_HOST (optional)"],
+    "ai_agent": ["OLLAMA_HOST (optional)"],
 }
 
 
@@ -480,6 +590,8 @@ def generate(plan: dict) -> dict:
     doc.append('"""')
 
     parts = ["#!/usr/bin/env python3", "\n".join(doc), RUNTIME.strip("\n")]
+    if any(n["type"] == "ai_agent" for n in nodes.values()):
+        parts.append(AGENT_RUNTIME.strip("\n"))
 
     cfg = [
         f"WEBHOOK_PATH = {trig['params'].get('path', '')!r}" if trig.get("type") == "webhook" else "WEBHOOK_PATH = ''",

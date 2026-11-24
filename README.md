@@ -62,6 +62,36 @@ Shareable links: `?q=<request>&fault=1&tab=tab-sim` pre-fills the request, turns
 
 Checked in headless Chrome: server mode, browser-only mode, light and dark themes, and a 390px-wide viewport with no horizontal overflow.
 
+## Agents, and one-click deploy into Flowise
+
+Any request that isn't an automation ("a study assistant that…", "what is the EMI on…", "an assistant that answers questions about research papers") becomes an **AI agent**. It's a Flowise Agent running a local model (`qwen3:4b-instruct` via Ollama) with tools picked from the wording: calculator, date/time, a web-page reader, a fixed API, and Arxiv search. Automations can include an agent step too ("every morning research the latest AI news and email me a summary").
+
+**Deploy & run** (Flowise tab on the website, or `POST /flowise/deploy`) does the rest:
+
+1. creates the flow in your Flowise;
+2. creates the Flowise variables it uses (e.g. `SLACK_WEBHOOK_URL`) from values you enter;
+3. attaches credentials you've already saved in Flowise (Gmail, Drive, Sheets…) to the tools that need them;
+4. installs a compact web-page reader for agents (Flowise's built-in scraper returns whole pages, which overflow a small model);
+5. runs the flow once and shows the answer and each node's status, then opens a chat box to keep talking to the agent.
+
+If something needs you, such as a Google sign-in or a missing variable, it says exactly what and doesn't run.
+
+**Your own Flowise:** `tools/flowise_start.sh` runs the `~/Flowise` build on `http://localhost:3000`. The first time, create your admin account there, then go to *Settings → API Keys* and create a key with the agentflows, chatflows, variables and tools permissions plus `credentials:view`. Start FlowForge with it so you don't have to paste it:
+
+```bash
+FLOWISE_API_KEY=<your key> .venv/bin/python -m flowforge serve     # http://127.0.0.1:8000
+```
+
+**Measured in Flowise on an 8 GB M2 MacBook Air** (`qwen3:4b-instruct`, 8k context):
+- EMI and percentage questions: 3–5 s, using the calculator tool.
+- Days until a deadline: correct (24 Nov → 15 Dec = 21 days, 3 h/day = 63 h), using the date tool and conversation memory.
+- Read the Ohm's-law and Kirchhoff Wikipedia pages and answer: 12–14 s each, correct.
+- Webhook → condition → Slack-style message: every node `FINISHED`, and the receiver got valid JSON even with quotes in the data.
+
+**8 GB RAM is tight.** Flowise, Ollama, Chrome and FlowForge together can run the Mac out of memory, and then a 10-second answer takes 10+ minutes. Close other apps during a demo. Don't raise the context above 8k on an 8 GB Mac: at 16k the model no longer fits the GPU.
+
+`qwen3:4b` (the planner) thinks out loud, and Flowise's Ollama connector doesn't switch that off, so generated agents use the non-thinking `qwen3:4b-instruct` (`ollama pull qwen3:4b-instruct`; override with `FLOWFORGE_AGENT_MODEL`).
+
 ## Online server (your Mac + a free public link)
 
 ```bash
@@ -105,7 +135,7 @@ flowforge/
 tools/dump_flowise_specs.js      regenerates the specs from a built Flowise checkout
 eval/requests.json               18 fixed requests; results-template.md is the latest run
 examples/                        committed outputs for two requests
-tests/test_flowforge.py          31 tests
+tests/test_flowforge.py          39 tests
 web/                             the website (index.html, app.js, styles.css)
 tools/build_site.py              static, server-free build of the website
 ```
@@ -142,16 +172,16 @@ Still true: there's no email-arrival trigger (FlowForge emits a 5-minute schedul
 
 ## Evaluation (template planner, `eval/results-template.md`)
 
-18 requests covering email, storage, spreadsheets, messaging, schedules, webhooks, forms, branches, delays and multi-step chains. All 18 pass every metric: intent, plan validity, Flowise/n8n validity, Python parse, **Python dry-run executed in a subprocess**, simulation, and repair of injected faults. A repair counts only if the repaired plan has the same steps *and* the same dry-run behavior as the unfaulted plan.
+22 requests covering open-ended agent tasks, email, storage, spreadsheets, messaging, schedules, webhooks, forms, branches, delays and multi-step chains. All 18 pass every metric: intent, plan validity, Flowise/n8n validity, Python parse, **Python dry-run executed in a subprocess**, simulation, and repair of injected faults. A repair counts only if the repaired plan has the same steps *and* the same dry-run behavior as the unfaulted plan.
 
 An earlier version of this metric counted any valid result as repaired. Under the stricter definition, that version of the repairer scored **10/18**: it deleted steps it couldn't identify, and it refilled a lost `greater_than` with the default `contains`, which flipped a branch. Both are fixed and have regression tests. The 18/18 above is the stricter number.
 
 Read that number carefully: **the requests were written alongside the template planner, so 100% measures the pipeline's correctness on known phrasings, not generalization.** Six extra phrasings tried during development exposed planner gaps (missing an email trigger without "when", misordered fetch → post, "translate … forward"). Those were fixed, so they're no longer a held-out test either. **LLM planner (`eval/results-llm.md`, qwen3:4b via Ollama on an Apple-silicon Mac):** intent 18/18, plan/Flowise/n8n/Python/dry-run/simulation 18/18, repair 17/18. In R07, after the injected faults, the repaired plan was valid but had different steps. Three requests (R05, R10, R15) needed a second attempt, where the model revised its plan from the validator's errors. The full run took 1,101 s for 18 requests, each also re-run with injected faults. The same caveat applies: these are known phrasings, and R01 is the worked example inside the planner prompt.
 
-## Node catalog (24)
+## Node catalog (25)
 
 Triggers: `manual`, `webhook`, `schedule`, `email_received`, `form_submitted`.
-Actions/logic: `send_email`, `slack_message`, `discord_message`, `teams_message`, `sms_message`, `notify`, `sheets_append`, `sheets_read`, `drive_save`, `drive_list`, `extract_attachments`, `http_request`, `condition`, `transform`, `delay`, `llm_summarize`, `create_task`, `calendar_create`, `log_message`.
+Actions/logic: `send_email`, `slack_message`, `discord_message`, `teams_message`, `sms_message`, `notify`, `sheets_append`, `sheets_read`, `drive_save`, `drive_list`, `extract_attachments`, `http_request`, `condition`, `transform`, `delay`, `llm_summarize`, `ai_agent`, `create_task`, `calendar_create`, `log_message`.
 `python -m flowforge catalog` prints params and outputs. `GET /catalog` returns them with each node's Flowise/n8n mapping status.
 
 ## API

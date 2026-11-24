@@ -354,7 +354,8 @@ def validate_n8n(wf: dict) -> Report:
     # every non-trigger, non-sub-node must have an incoming main connection
     incoming = {c["node"] for outs in wf["connections"].values() for branches in outs.values() for b in branches for c in b}
     for n in wf["nodes"]:
-        if n.get("type") in TRIGGER_TYPES_N8N or n.get("type", "").startswith("@n8n/n8n-nodes-langchain.lm"):
+        if n.get("type") in TRIGGER_TYPES_N8N or n.get("type", "").startswith(("@n8n/n8n-nodes-langchain.lm",
+                                                                                "@n8n/n8n-nodes-langchain.tool")):
             continue
         if n.get("name") not in incoming:
             r.add("error", "E_N8N_UNREACHABLE", f"Node {n.get('name')!r} has no incoming connection", n.get("name"), T)
@@ -392,7 +393,8 @@ def validate_python(code: str, plan: dict | None = None) -> Report:
         for nid in node_map(plan):
             if f"step_{nid}" not in funcs:
                 r.add("error", "E_PY_STRUCTURE", f"No function for step '{nid}'", nid, T)
-    allowed = {"argparse", "base64", "json", "os", "re", "sys", "time", "email", "requests", "http", "urllib", "datetime"}
+    allowed = {"argparse", "base64", "json", "os", "re", "sys", "time", "email", "requests", "http", "urllib", "datetime",
+               "ast", "operator"}
     for n in ast.walk(tree):
         mods = []
         if isinstance(n, ast.Import):

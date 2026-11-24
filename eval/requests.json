@@ -1,56 +1,225 @@
 [
-  {"id": "R01", "pattern": "email + storage + messaging",
-   "request": "when I get an email with an invoice attached, save it to Drive and ping me on Slack",
-   "expect_trigger": "email_received", "expect_nodes": ["extract_attachments", "drive_save", "slack_message"]},
-  {"id": "R02", "pattern": "form + email reply",
-   "request": "when someone submits the contact form, email them a thank-you email",
-   "expect_trigger": "form_submitted", "expect_nodes": ["send_email"]},
-  {"id": "R03", "pattern": "form + spreadsheet + task",
-   "request": "when someone submits the job application form, add a row to the spreadsheet and create a jira task",
-   "expect_trigger": "form_submitted", "expect_nodes": ["sheets_append", "create_task"]},
-  {"id": "R04", "pattern": "scheduled report",
-   "request": "every monday at 9am read the sales sheet, summarize it and email me the summary",
-   "expect_trigger": "schedule", "expect_nodes": ["sheets_read", "llm_summarize", "send_email"]},
-  {"id": "R05", "pattern": "webhook + branch",
-   "request": "when a webhook receives an order, if the amount is over 100 post to slack otherwise add a row to the spreadsheet",
-   "expect_trigger": "webhook", "expect_nodes": ["condition", "slack_message", "sheets_append"]},
-  {"id": "R06", "pattern": "scheduled API call + messaging",
-   "request": "every day at 8am call https://api.example.com/status and post it to discord",
-   "expect_trigger": "schedule", "expect_nodes": ["http_request", "discord_message"]},
-  {"id": "R07", "pattern": "email + condition on subject",
-   "request": "when a new email arrives, if the subject contains urgent send me a text message",
-   "expect_trigger": "email_received", "expect_nodes": ["condition", "sms_message"]},
-  {"id": "R08", "pattern": "email logging to spreadsheet",
-   "request": "whenever I receive an email from billing@acme.com, log it in the google sheet",
-   "expect_trigger": "email_received", "expect_nodes": ["sheets_append"]},
-  {"id": "R09", "pattern": "email summary to Teams",
-   "request": "when I get a new email, summarize it and post the summary to microsoft teams",
-   "expect_trigger": "email_received", "expect_nodes": ["llm_summarize", "teams_message"]},
-  {"id": "R10", "pattern": "webhook + calendar",
-   "request": "when a webhook receives a booking request, create a calendar event and email me",
-   "expect_trigger": "webhook", "expect_nodes": ["calendar_create", "send_email"]},
-  {"id": "R11", "pattern": "multi-step chain with delay",
-   "request": "when someone submits the signup form, email them a thank-you email, wait 10 minutes, then post to slack",
-   "expect_trigger": "form_submitted", "expect_nodes": ["send_email", "delay", "slack_message"]},
-  {"id": "R12", "pattern": "manual + storage listing",
-   "request": "find files named report in my drive and email me the list",
-   "expect_trigger": "manual", "expect_nodes": ["drive_list", "send_email"]},
-  {"id": "R13", "pattern": "hourly monitoring",
-   "request": "every hour fetch https://status.example.com/api/health and log the result",
-   "expect_trigger": "schedule", "expect_nodes": ["http_request", "log_message"]},
-  {"id": "R14", "pattern": "webhook forwarding",
-   "request": "when a webhook receives a signup, send it to https://crm.example.com/api/leads and notify me on slack",
-   "expect_trigger": "webhook", "expect_nodes": ["http_request", "slack_message"]},
-  {"id": "R15", "pattern": "form + branch on field",
-   "request": "when the feedback form is submitted, if the rating is less than 3 create a jira task otherwise add a row to the spreadsheet",
-   "expect_trigger": "form_submitted", "expect_nodes": ["condition", "create_task", "sheets_append"]},
-  {"id": "R16", "pattern": "email attachments to storage folder",
-   "request": "when I get an email with a pdf attachment, save it to the Receipts folder in google drive and reply to the sender",
-   "expect_trigger": "email_received", "expect_nodes": ["extract_attachments", "drive_save", "send_email"]},
-  {"id": "R17", "pattern": "scheduled storage of API data",
-   "request": "every friday at 5pm get https://api.example.com/weekly-metrics, summarize it and save it to google drive",
-   "expect_trigger": "schedule", "expect_nodes": ["http_request", "llm_summarize", "drive_save"]},
-  {"id": "R18", "pattern": "manual chat notify",
-   "request": "summarize the text I give you and let me know",
-   "expect_trigger": "manual", "expect_nodes": ["llm_summarize", "notify"]}
+  {
+    "id": "R01",
+    "pattern": "email + storage + messaging",
+    "request": "when I get an email with an invoice attached, save it to Drive and ping me on Slack",
+    "expect_trigger": "email_received",
+    "expect_nodes": [
+      "extract_attachments",
+      "drive_save",
+      "slack_message"
+    ]
+  },
+  {
+    "id": "R02",
+    "pattern": "form + email reply",
+    "request": "when someone submits the contact form, email them a thank-you email",
+    "expect_trigger": "form_submitted",
+    "expect_nodes": [
+      "send_email"
+    ]
+  },
+  {
+    "id": "R03",
+    "pattern": "form + spreadsheet + task",
+    "request": "when someone submits the job application form, add a row to the spreadsheet and create a jira task",
+    "expect_trigger": "form_submitted",
+    "expect_nodes": [
+      "sheets_append",
+      "create_task"
+    ]
+  },
+  {
+    "id": "R04",
+    "pattern": "scheduled report",
+    "request": "every monday at 9am read the sales sheet, summarize it and email me the summary",
+    "expect_trigger": "schedule",
+    "expect_nodes": [
+      "sheets_read",
+      "llm_summarize",
+      "send_email"
+    ]
+  },
+  {
+    "id": "R05",
+    "pattern": "webhook + branch",
+    "request": "when a webhook receives an order, if the amount is over 100 post to slack otherwise add a row to the spreadsheet",
+    "expect_trigger": "webhook",
+    "expect_nodes": [
+      "condition",
+      "slack_message",
+      "sheets_append"
+    ]
+  },
+  {
+    "id": "R06",
+    "pattern": "scheduled API call + messaging",
+    "request": "every day at 8am call https://api.example.com/status and post it to discord",
+    "expect_trigger": "schedule",
+    "expect_nodes": [
+      "http_request",
+      "discord_message"
+    ]
+  },
+  {
+    "id": "R07",
+    "pattern": "email + condition on subject",
+    "request": "when a new email arrives, if the subject contains urgent send me a text message",
+    "expect_trigger": "email_received",
+    "expect_nodes": [
+      "condition",
+      "sms_message"
+    ]
+  },
+  {
+    "id": "R08",
+    "pattern": "email logging to spreadsheet",
+    "request": "whenever I receive an email from billing@acme.com, log it in the google sheet",
+    "expect_trigger": "email_received",
+    "expect_nodes": [
+      "sheets_append"
+    ]
+  },
+  {
+    "id": "R09",
+    "pattern": "email summary to Teams",
+    "request": "when I get a new email, summarize it and post the summary to microsoft teams",
+    "expect_trigger": "email_received",
+    "expect_nodes": [
+      "llm_summarize",
+      "teams_message"
+    ]
+  },
+  {
+    "id": "R10",
+    "pattern": "webhook + calendar",
+    "request": "when a webhook receives a booking request, create a calendar event and email me",
+    "expect_trigger": "webhook",
+    "expect_nodes": [
+      "calendar_create",
+      "send_email"
+    ]
+  },
+  {
+    "id": "R11",
+    "pattern": "multi-step chain with delay",
+    "request": "when someone submits the signup form, email them a thank-you email, wait 10 minutes, then post to slack",
+    "expect_trigger": "form_submitted",
+    "expect_nodes": [
+      "send_email",
+      "delay",
+      "slack_message"
+    ]
+  },
+  {
+    "id": "R12",
+    "pattern": "manual + storage listing",
+    "request": "find files named report in my drive and email me the list",
+    "expect_trigger": "manual",
+    "expect_nodes": [
+      "drive_list",
+      "send_email"
+    ]
+  },
+  {
+    "id": "R13",
+    "pattern": "hourly monitoring",
+    "request": "every hour fetch https://status.example.com/api/health and log the result",
+    "expect_trigger": "schedule",
+    "expect_nodes": [
+      "http_request",
+      "log_message"
+    ]
+  },
+  {
+    "id": "R14",
+    "pattern": "webhook forwarding",
+    "request": "when a webhook receives a signup, send it to https://crm.example.com/api/leads and notify me on slack",
+    "expect_trigger": "webhook",
+    "expect_nodes": [
+      "http_request",
+      "slack_message"
+    ]
+  },
+  {
+    "id": "R15",
+    "pattern": "form + branch on field",
+    "request": "when the feedback form is submitted, if the rating is less than 3 create a jira task otherwise add a row to the spreadsheet",
+    "expect_trigger": "form_submitted",
+    "expect_nodes": [
+      "condition",
+      "create_task",
+      "sheets_append"
+    ]
+  },
+  {
+    "id": "R16",
+    "pattern": "email attachments to storage folder",
+    "request": "when I get an email with a pdf attachment, save it to the Receipts folder in google drive and reply to the sender",
+    "expect_trigger": "email_received",
+    "expect_nodes": [
+      "extract_attachments",
+      "drive_save",
+      "send_email"
+    ]
+  },
+  {
+    "id": "R17",
+    "pattern": "scheduled storage of API data",
+    "request": "every friday at 5pm get https://api.example.com/weekly-metrics, summarize it and save it to google drive",
+    "expect_trigger": "schedule",
+    "expect_nodes": [
+      "http_request",
+      "llm_summarize",
+      "drive_save"
+    ]
+  },
+  {
+    "id": "R18",
+    "pattern": "manual chat notify",
+    "request": "summarize the text I give you and let me know",
+    "expect_trigger": "manual",
+    "expect_nodes": [
+      "llm_summarize",
+      "notify"
+    ]
+  },
+  {
+    "id": "R19",
+    "pattern": "open-ended agent: study helper",
+    "request": "a study assistant that helps engineering students with calculations, deadlines and reading web articles",
+    "expect_trigger": "manual",
+    "expect_nodes": [
+      "ai_agent"
+    ]
+  },
+  {
+    "id": "R20",
+    "pattern": "open-ended agent: finance question",
+    "request": "what is the EMI on a 5 lakh loan at 9% for 3 years",
+    "expect_trigger": "manual",
+    "expect_nodes": [
+      "ai_agent"
+    ]
+  },
+  {
+    "id": "R21",
+    "pattern": "open-ended agent: research",
+    "request": "an assistant that answers questions about the latest research papers on graph neural networks",
+    "expect_trigger": "manual",
+    "expect_nodes": [
+      "ai_agent"
+    ]
+  },
+  {
+    "id": "R22",
+    "pattern": "scheduled agent + summary + email",
+    "request": "every morning at 8am research the latest AI news and email me a summary",
+    "expect_trigger": "schedule",
+    "expect_nodes": [
+      "ai_agent",
+      "llm_summarize",
+      "send_email"
+    ]
+  }
 ]

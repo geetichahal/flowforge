@@ -255,6 +255,10 @@ def execute(node: dict, p: dict, world: MockWorld) -> tuple[dict, str]:
         words = str(p.get("text", "")).split()
         summary = " ".join(words[:25]) + ("…" if len(words) > 25 else "")
         return {"summary": f"[mock {p.get('model')}] {summary}"}, "mock LLM summary"
+    if t == "ai_agent":
+        tools = [x.strip() for x in str(p.get("tools", "")).split(",") if x.strip()]
+        answer = f"[mock {p.get('model')}] answer to: {str(p.get('input', ''))[:120]}"
+        return {"answer": answer}, f"mock agent answered (tools available: {', '.join(tools) or 'none'})"
     if t == "create_task":
         key = f"{p['project']}-{100 + len(world.tasks)}"
         world.tasks.append({"key": key, "title": p["title"]})

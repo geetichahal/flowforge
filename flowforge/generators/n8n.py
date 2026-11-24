@@ -24,6 +24,7 @@ N8N_FIELDS = {
                        "attachments": "attachments"},
     "send_email": {"message_id": "id"},
     "llm_summarize": {"summary": "text"},
+    "ai_agent": {"answer": "output"},
     "drive_save": {"file_id": "id", "link": "webViewLink"},
     "http_request": {"body": "", "status": "statusCode"},
     "sheets_read": {"rows": "*all*", "row_count": "*count*"},
@@ -266,6 +267,27 @@ class N8nBuilder:
             self.connections[model["name"]] = {"ai_languageModel": [[{"node": name, "type": "ai_languageModel", "index": 0}]]}
             self.warn(nid, "W_N8N_OUTPUT", "The LLM chain outputs its result in the 'text' field.", "info")
             return [chain, model]
+        if t == "ai_agent":
+            agent = {"name": name, "type": "@n8n/n8n-nodes-langchain.agent", "typeVersion": 1.7,
+                     "parameters": {"promptType": "define", "text": p.get("input", ""),
+                                    "options": {"systemMessage": raw.get("instruction", "")}}}
+            subs = [{"name": self.unique_name(f"{name} (Ollama model)"), "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+                     "typeVersion": 1, "parameters": {"model": raw.get("model", "qwen3:4b-instruct"), "options": {}}}]
+            self.connections[subs[0]["name"]] = {"ai_languageModel": [[{"node": name, "type": "ai_languageModel", "index": 0}]]}
+            for tool in [x.strip() for x in str(raw.get("tools", "")).split(",") if x.strip()]:
+                spec = {"calculator": ("@n8n/n8n-nodes-langchain.toolCalculator", 1, {}),
+                        "web": ("@n8n/n8n-nodes-langchain.toolHttpRequest", 1.1,
+                                {"toolDescription": "Fetch a web page or API. Give the full URL.", "url": "={{ $fromAI('url') }}"}),
+                        "http": ("@n8n/n8n-nodes-langchain.toolHttpRequest", 1.1,
+                                 {"toolDescription": "Call the API", "url": raw.get("url") or "={{ $fromAI('url') }}"}),
+                        "arxiv": None, "datetime": None}.get(tool)
+                if spec is None:
+                    self.warn(nid, "W_N8N_APPROX", f"Agent tool '{tool}' has no built-in n8n tool node; the agent runs without it.")
+                    continue
+                sub = {"name": self.unique_name(f"{name} ({tool})"), "type": spec[0], "typeVersion": spec[1], "parameters": spec[2]}
+                self.connections[sub["name"]] = {"ai_tool": [[{"node": name, "type": "ai_tool", "index": 0}]]}
+                subs.append(sub)
+            return [agent, *subs]
         if t == "create_task":
             return node("n8n-nodes-base.jira", 1,
                         {"project": {"__rl": True, "value": p.get("project", ""), "mode": "id"},

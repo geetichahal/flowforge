@@ -46,5 +46,16 @@ def get_flow(flow_id: str) -> dict:
     return _request("GET", f"/api/v1/chatflows/{flow_id}")
 
 
-def predict(flow_id: str, question: str) -> dict:
-    return _request("POST", f"/api/v1/prediction/{flow_id}", {"question": question, "streaming": False}, timeout=120)
+def predict(flow_id: str, question: str, chat_id: str | None = None, base: str | None = None,
+            api_key: str | None = None, form: dict | None = None, timeout: float = 180) -> dict:
+    """Run a flow once. Reusing chat_id continues the same conversation (the agent remembers earlier turns)."""
+    body: dict = {"question": question, "streaming": False}
+    if chat_id:
+        body["chatId"] = chat_id
+    if form:
+        body["form"] = form
+    return _request("POST", f"/api/v1/prediction/{flow_id}", body, timeout=timeout, base=base, api_key=api_key)
+
+
+def trigger_webhook(flow_id: str, payload: dict, base: str | None = None, api_key: str | None = None) -> dict:
+    return _request("POST", f"/api/v1/webhook/{flow_id}", payload, timeout=180, base=base, api_key=api_key)

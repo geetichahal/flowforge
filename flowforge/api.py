@@ -56,6 +56,35 @@ class FlowisePushTo(FlowisePush):
     api_key: str = ""
 
 
+class FlowiseDeploy(BaseModel):
+    plan: dict[str, Any]
+    url: str = ""
+    api_key: str = ""
+    variables: dict[str, str] = {}
+    test_input: str | None = None
+    confirm: bool = Field(False, description="Must be true: this creates a flow in your Flowise and runs it once")
+
+
+class FlowiseChat(BaseModel):
+    flow_id: str
+    message: str
+    chat_id: str | None = None
+    url: str = ""
+    api_key: str = ""
+
+
+def flowise_target(url: str, api_key: str, request: Request) -> tuple[str, str | None]:
+    """Where to deploy. Local requests may fall back to FLOWISE_URL / FLOWISE_API_KEY set on this machine;
+    requests from the internet must bring their own and pass the network guard."""
+    public = is_public_request(request)
+    base = (url or "").strip() or ("" if public else os.environ.get("FLOWISE_URL", "http://localhost:3000"))
+    if not base:
+        raise HTTPException(400, "Enter your Flowise URL")
+    key = (api_key or "").strip() or (None if public else os.environ.get("FLOWISE_API_KEY"))
+    check_push_target(base, public)
+    return base, key
+
+
 def _valid_plan(body: PlanBody) -> dict:
     plan = normalize(body.plan)
     rep = validate_plan(plan)
@@ -163,6 +192,34 @@ def create_app(with_ui: bool = False) -> FastAPI:
             return flowise_client.create_flow(body.export, base=body.url, api_key=body.api_key or None)
         except Exception as exc:
             raise HTTPException(502, str(exc))
+
+    @app.post("/flowise/deploy")
+    def flowise_deploy(body: FlowiseDeploy, request: Request):
+        """Create the flow in Flowise, connect variables and saved credentials, and run it once."""
+        if not body.confirm:
+            raise HTTPException(400, "Set confirm=true to create and run this flow in your Flowise")
+        plan = _valid_plan(PlanBody(plan=body.plan))
+        base, key = flowise_target(body.url, body.api_key, request)
+        from . import deploy as deploy_mod
+        try:
+            return deploy_mod.deploy(plan, flowise.generate(plan)["export"], base=base, api_key=key,
+                                     variables=body.variables, test_input=body.test_input)
+        except Exception as exc:
+            raise HTTPException(502, str(exc)[:500])
+
+    @app.post("/flowise/chat")
+    def flowise_chat(body: FlowiseChat, request: Request):
+        """Send one message to a deployed chat agent; reuse chat_id to continue the conversation."""
+        base, key = flowise_target(body.url, body.api_key, request)
+        from . import flowise_client
+        import time as _t
+        t0 = _t.time()
+        try:
+            out = flowise_client.predict(body.flow_id, body.message, chat_id=body.chat_id, base=base, api_key=key)
+        except Exception as exc:
+            raise HTTPException(502, str(exc)[:500])
+        return {"answer": (out.get("text") or "").strip(), "chat_id": out.get("chatId") or body.chat_id,
+                "seconds": round(_t.time() - t0, 1)}
 
     if with_ui:
         import gradio as gr

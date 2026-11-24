@@ -19,6 +19,11 @@ def model() -> str:
     return os.environ.get("FLOWFORGE_MODEL", DEFAULT_MODEL)
 
 
+def agent_model() -> str:
+    """Model used inside generated agents and LLM steps: a non-thinking model answers fast and clean."""
+    return os.environ.get("FLOWFORGE_AGENT_MODEL", "qwen3:4b-instruct")
+
+
 def available(timeout: float = 1.5) -> tuple[bool, str]:
     """(True, model) if Ollama answers and has the configured model pulled."""
     try:

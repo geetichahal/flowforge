@@ -49,6 +49,8 @@ class NodeType:
         return [p.name for p in self.params if p.required]
 
 
+AGENT_TOOLS = ("calculator", "datetime", "web", "http", "arxiv")
+
 CONDITION_OPERATORS = (
     "contains", "not_contains", "equals", "not_equals", "starts_with",
     "ends_with", "greater_than", "less_than", "is_empty", "is_not_empty",
@@ -317,12 +319,28 @@ NODES: list[NodeType] = [
         params=(
             Param("text", True, None, "Text to summarize"),
             Param("instruction", False, "Summarize this in two sentences.", "What to do with the text"),
-            Param("model", False, "qwen3:4b", "Ollama model name"),
+            Param("model", False, "qwen3:4b-instruct", "Ollama model name"),
         ),
         outputs={"summary": "Model output"},
         sample_output={"summary": "(mock summary)"},
         service="llm",
         keywords=("summarize", "summary", "tl;dr", "rewrite", "classify"),
+    ),
+    NodeType(
+        "ai_agent", "action", "AI Agent",
+        "An assistant that answers or carries out an open-ended task with a local LLM, using tools when "
+        "useful: calculator, date/time, reading web pages, calling web APIs, searching Arxiv papers.",
+        params=(
+            Param("instruction", True, None, "What the agent is for and how it should behave"),
+            Param("input", False, "{{trigger.input}}", "What to give the agent each run (usually the user's message)"),
+            Param("tools", False, "calculator,datetime", "Comma-separated: calculator, datetime, web, http, arxiv"),
+            Param("model", False, "qwen3:4b-instruct", "Ollama model (a non-thinking model answers faster and cleaner)"),
+            Param("url", False, "", "API URL for the 'http' tool"),
+        ),
+        outputs={"answer": "The agent's reply"},
+        sample_output={"answer": "(mock agent answer)"},
+        service="llm",
+        keywords=("assistant", "agent", "chatbot", "answer questions", "help me", "explain", "research", "tutor"),
     ),
     # ------------------------------------------------------------------ productivity
     NodeType(
@@ -366,7 +384,7 @@ NODES: list[NodeType] = [
 CATALOG: dict[str, NodeType] = {n.type: n for n in NODES}
 TRIGGERS = [n.type for n in NODES if n.kind == "trigger"]
 
-assert len(CATALOG) == len(NODES) == 24, "catalog must have 24 unique nodes"
+assert len(CATALOG) == len(NODES) == 25, "catalog must have 25 unique nodes"
 
 
 def get(node_type: str) -> NodeType | None:

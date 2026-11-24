@@ -24,8 +24,8 @@ def good_plan():
 
 
 # ------------------------------------------------------------------ catalog
-def test_catalog_has_24_nodes_with_mappings():
-    assert len(catalog.CATALOG) == 24
+def test_catalog_has_25_nodes_with_mappings():
+    assert len(catalog.CATALOG) == 25
     for n in catalog.NODES:
         assert n.flowise in ("direct", "approximate", "none")
         assert n.type in python_gen.BODIES, f"python generator lacks {n.type}"
@@ -297,3 +297,113 @@ def test_tunneled_requests_get_the_public_guard():
     assert via_tunnel.status_code == 400
     assert c.get("/health", headers={"Cf-Connecting-Ip": "203.0.113.9"}).json()["public"] is True
     assert c.get("/health").json()["public"] is False  # same machine: local Flowise pushes allowed
+
+
+# ------------------------------------------------------------------ AI agents and one-click deploy
+AGENT_REQ = "a study assistant that helps engineering students with calculations, deadlines and reading web articles"
+
+
+def test_open_ended_requests_become_agents_with_matching_tools():
+    p = normalize(planner.template_plan(AGENT_REQ))
+    assert [n["type"] for n in p["nodes"]] == ["manual", "ai_agent"]
+    assert p["nodes"][1]["params"]["tools"] == "calculator,datetime,web"
+    p = normalize(planner.template_plan("what is the EMI on a 5 lakh loan at 9% for 3 years"))
+    assert p["nodes"][1]["type"] == "ai_agent" and "calculator" in p["nodes"][1]["params"]["tools"]
+    p = normalize(planner.template_plan("every morning at 8am research the latest AI news and email me a summary"))
+    assert [n["type"] for n in p["nodes"]] == ["schedule", "ai_agent", "llm_summarize", "send_email"]
+
+
+def test_agent_generates_in_all_three_formats():
+    p = normalize(planner.template_plan(AGENT_REQ))
+    fw = flowise.generate(p)
+    assert validate_flowise(fw["export"]).ok
+    agent = next(n for n in flowise.flow_data(fw["export"])["nodes"] if n["data"]["name"] == "agentAgentflow")
+    inp = agent["data"]["inputs"]
+    assert inp["agentModelConfig"]["modelName"] == "qwen3:4b-instruct" and inp["agentModelConfig"]["think"] is False
+    assert [t["agentSelectedTool"] for t in inp["agentTools"]] == ["calculator", "currentDateTime", "webScraperTool"]
+    assert inp["agentEnableMemory"] is True  # chat agent
+    wf = n8n.generate(p)["workflow"]
+    assert validate_n8n(wf).ok
+    assert any(n["type"] == "@n8n/n8n-nodes-langchain.agent" for n in wf["nodes"])
+    code = python_gen.generate(p)["code"]
+    assert validate_python(code, p).ok and "def run_agent(" in code
+
+
+def test_python_agent_calculator_is_safe():
+    ns = {}
+    exec(python_gen.AGENT_RUNTIME.split("AGENT_TOOLS = {")[0].replace("import ast", "import ast, re, os, json"), ns)
+    assert ns["_calc"]("2480*0.15") == "372.0"
+    with pytest.raises(Exception):
+        ns["_calc"]("__import__('os').system('echo hi')")
+
+
+def test_flowise_message_bodies_are_built_safely():
+    p = normalize(planner.template_plan(BRANCH))
+    flow = flowise.flow_data(flowise.generate(p)["export"])
+    builders = [n for n in flow["nodes"] if n["data"]["name"] == "customFunctionAgentflow"]
+    assert builders and "JSON.stringify" in builders[0]["data"]["inputs"]["customFunctionJavascriptFunction"]
+    http = next(n for n in flow["nodes"] if n["data"]["name"] == "httpAgentflow")
+    assert http["data"]["inputs"]["body"] == "{{ " + builders[0]["id"] + " }}"
+
+
+def _fake_flowise(state):
+    class H(BaseHTTPRequestHandler):
+        def _send(self, obj, code=200):
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(obj).encode())
+
+        def do_GET(self):
+            if self.path == "/api/v1/variables":
+                return self._send(state["variables"])
+            if self.path == "/api/v1/credentials":
+                return self._send(state["credentials"])
+            if self.path == "/api/v1/tools":
+                return self._send(state["tools"])
+            self._send({}, 404)
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
+            state["calls"].append((self.path, body))
+            if self.path == "/api/v1/variables":
+                state["variables"].append(body)
+                return self._send(body)
+            if self.path == "/api/v1/tools":
+                state["tools"].append({**body, "id": "tool-1"})
+                return self._send({"id": "tool-1"})
+            if self.path == "/api/v1/chatflows":
+                state["flow"] = json.loads(body["flowData"])
+                return self._send({"id": "flow-1", "name": body["name"], "type": body["type"]})
+            if self.path.startswith("/api/v1/prediction/") or self.path.startswith("/api/v1/webhook/"):
+                return self._send({"text": "fake answer", "chatId": "chat-1",
+                                   "agentFlowExecutedData": [{"nodeLabel": "Start", "status": "FINISHED"}]})
+            self._send({}, 404)
+
+        def log_message(self, *a):
+            pass
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def test_deploy_wires_variables_credentials_and_tools():
+    from flowforge import deploy
+    state = {"variables": [], "credentials": [{"id": "cred-g", "name": "My Gmail", "credentialName": "gmailOAuth2"}],
+             "tools": [], "calls": []}
+    srv = _fake_flowise(state)
+    base = f"http://127.0.0.1:{srv.server_port}"
+    # agent: compact web tool is installed and swapped in; test run happens
+    p = normalize(planner.template_plan(AGENT_REQ))
+    d = deploy.deploy(p, flowise.generate(p)["export"], base=base, api_key="k")
+    assert d["ready"] and d["run"]["ok"] and d["run"]["answer"] == "fake answer"
+    tools = next(n for n in state["flow"]["nodes"] if n["data"]["name"] == "agentAgentflow")["data"]["inputs"]["agentTools"]
+    assert {"agentSelectedTool": "customTool"}.items() <= tools[-1].items() and tools[-1]["agentSelectedToolConfig"]["selectedTool"] == "tool-1"
+    # automation needing Gmail + Drive + Slack variable: Gmail attaches, Drive and the variable become to-dos, no run
+    p = normalize(planner.template_plan(INVOICE))
+    d = deploy.deploy(p, flowise.generate(p)["export"], base=base, api_key="k")
+    srv.shutdown()
+    assert not d["ready"] and d["run"]["skipped"]
+    assert any("SLACK_WEBHOOK_URL" in t for t in d["todo"]) and any("Google Drive" in t for t in d["todo"])
+    assert "cred-g" in json.dumps(state["flow"])  # attached inside Flowise only
+    assert "cred-g" not in json.dumps(flowise.generate(p)["export"])  # never in the exported file
