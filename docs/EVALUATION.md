@@ -80,7 +80,7 @@ to the template planner.
 |---|---|---|---|---|---|---|---|---|---|
 | Held-out 1 (15) | **14/15** | 15/15 | 15/15 | 15/15 | 15/15 | 15/15 | 15/15 | 15/15 | ≈ 20 min of compute (the file records 5,823 s of wall time because the Mac slept for 77 min on a flat battery mid-run) |
 | Held-out 2, first run (15) | **14/15** | 15/15 | 15/15 | 15/15 | 15/15 | 15/15 | **14/15** | 15/15 | 1,355 s |
-| **Held-out 2, re-run after simulator fix (15)** | **14/15** | 15/15 | 15/15 | 15/15 | 15/15 | 15/15 | **15/15** | 15/15 | 1,908 s |
+| **Held-out 2, re-run after simulator fix (15)** | **14/15** | 15/15 | 15/15 | 15/15 | 15/15 | 15/15 | **15/15** | 15/15 | 2,137 s (`eval/results-heldout2-llm.md`, 2026-11-25 00:59) |
 
 Each request is run twice (clean, and with injected faults for `repair`), so planning one request takes
 roughly 40–90 s.

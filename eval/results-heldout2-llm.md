@@ -1,6 +1,6 @@
 # FlowForge evaluation (llm planner, `requests-heldout2.json`)
 
-15 requests · run 2026-11-25 00:51 · 1907.8s
+15 requests · run 2026-11-25 00:59 · 2136.5s
 
 First-attempt planner per request: llm:qwen3:4b ×15
 
