@@ -37,13 +37,31 @@ TIMEOUT = 30
 REF = re.compile(r"\{\{\s*([A-Za-z_]\w*)((?:\.[\w-]+)*)\s*\}\}")
 
 
+class ConfigError(Exception):
+    """A required environment variable is missing."""
+
+
+class StepFailed(Exception):
+    """A workflow step raised an error; carries the step id and the original exception."""
+
+    def __init__(self, step_id, error):
+        super().__init__(step_id + ": " + type(error).__name__ + ": " + str(error))
+        self.step_id = step_id
+        self.error = error
+
+
+def as_text(value):
+    """Message bodies must be text: structured data (an API response, a list of rows) is sent as JSON."""
+    return value if isinstance(value, str) else json.dumps(value, default=str)
+
+
 def env(name):
     """Read configuration from the environment. Secrets never live in this file."""
     value = os.environ.get(name)
     if not value:
         if DRY_RUN:
             return "<" + name + ">"
-        sys.exit("Missing environment variable " + name)
+        raise ConfigError("missing environment variable " + name)
     return value
 
 
@@ -92,7 +110,7 @@ def approve(action):
 
 def http(method, url, **kwargs):
     if requests is None:
-        sys.exit("Install requests to run for real: pip install requests")
+        raise RuntimeError("Install requests to run for real: pip install requests")
     response = requests.request(method, url, timeout=TIMEOUT, **kwargs)
     response.raise_for_status()
     return response
@@ -141,6 +159,10 @@ FORM_TITLE = ''
 CRON = ''
 
 
+# Step 1 of 4: Email Received (email_received)
+# Start when a new email arrives in Gmail matching a search query.
+# Trigger: starts the workflow; its output is available to later steps as {{trigger.<field>}}.
+# Produces: attachments, body, from, has_attachments, message_id, subject
 def step_trigger(ctx):
     """Email Received: Start when a new email arrives in Gmail matching a search query."""
     PARAMS = {'query': 'has:attachment subject:invoice'}
@@ -160,7 +182,7 @@ def step_trigger(ctx):
     base = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
     listing = http("GET", base, headers=google_headers(), params={"q": p["query"], "maxResults": 1}).json()
     if not listing.get("messages"):
-        sys.exit("No email matches " + repr(p["query"]))
+        raise LookupError("No email matches " + repr(p["query"]))
     msg_id = listing["messages"][0]["id"]
     msg = http("GET", base + "/" + msg_id, headers=google_headers(), params={"format": "full"}).json()
     headers = {h["name"].lower(): h["value"] for h in msg["payload"].get("headers", [])}
@@ -179,6 +201,11 @@ def step_trigger(ctx):
             "body": body, "has_attachments": bool(attachments), "attachments": attachments}
 
 
+# Step 2 of 4: Extract Attachments (extract_attachments)
+# Pull attachments (optionally only certain file types) out of an email.
+# Runs after 'trigger'.
+# Uses data: trigger.attachments
+# Produces: count, files, first_content, first_name
 def step_extract_attachments(ctx):
     """Extract Attachments: Pull attachments (optionally only certain file types) out of an email."""
     PARAMS = {'source': '{{trigger.attachments}}', 'file_types': ''}
@@ -198,6 +225,11 @@ def step_extract_attachments(ctx):
             "first_content": first.get("content", "")}
 
 
+# Step 3 of 4: Save to Google Drive (drive_save)
+# Save a file to Google Drive.
+# Runs after 'extract_attachments'.
+# Uses data: extract_attachments.first_content, extract_attachments.first_name
+# Produces: file_id, link
 def step_save_to_drive(ctx):
     """Save to Google Drive: Save a file to Google Drive."""
     PARAMS = {   'file_name': '{{extract_attachments.first_name}}',
@@ -208,7 +240,7 @@ def step_save_to_drive(ctx):
     p = render(PARAMS, ctx)
     if not approve("upload " + repr(p["file_name"]) + " to Google Drive"):
         return SAMPLE
-    content = p["content"] if isinstance(p["content"], bytes) else str(p["content"]).encode()
+    content = p["content"] if isinstance(p["content"], bytes) else as_text(p["content"]).encode()
     meta = {"name": p["file_name"]}
     if p.get("folder_id"):
         meta["parents"] = [p["folder_id"]]
@@ -222,6 +254,11 @@ def step_save_to_drive(ctx):
     return {"file_id": res.get("id", ""), "link": res.get("webViewLink", "")}
 
 
+# Step 4 of 4: Slack Message (slack_message)
+# Post a message to Slack through an incoming-webhook URL.
+# Runs after 'save_to_drive'.
+# Uses data: env.SLACK_WEBHOOK_URL, save_to_drive.link, trigger.from, trigger.subject
+# Produces: ok
 def step_notify_slack(ctx):
     """Slack Message: Post a message to Slack through an incoming-webhook URL."""
     PARAMS = {   'webhook_url': '{{env.SLACK_WEBHOOK_URL}}',
@@ -231,7 +268,7 @@ def step_notify_slack(ctx):
     p = render(PARAMS, ctx)
     if not approve("post to Slack: " + repr(str(p["text"])[:80])):
         return SAMPLE
-    http("POST", p["webhook_url"], json={"text": p["text"]})
+    http("POST", p["webhook_url"], json={"text": as_text(p["text"])})
     return {"ok": True}
 
 
@@ -248,6 +285,9 @@ def serve(port):
              + (" or from cron: " + CRON if CRON else "."))
 
 
+MESSAGE = ""
+
+
 def run(trigger_output=None):
     """Execute the steps in order. A step runs when at least one incoming edge is live."""
     ctx = {}
@@ -262,7 +302,11 @@ def run(trigger_output=None):
             print("[" + step_id + "] skipped (branch not taken)")
             continue
         print("[" + step_id + "] running")
-        ctx[step_id] = fn(ctx)
+        try:
+            ctx[step_id] = fn(ctx)
+        except Exception as exc:  # stop at the first failing step; later steps depend on its output
+            print("[" + step_id + "] FAILED: " + type(exc).__name__ + ": " + str(exc), file=sys.stderr)
+            raise StepFailed(step_id, exc) from exc
     return ctx
 
 
@@ -271,16 +315,39 @@ def main():
     parser.add_argument("--payload", help="JSON file used as the trigger output (skips the trigger)")
     parser.add_argument("--serve", action="store_true", help="for webhook/form triggers: listen for requests")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8765")))
+    parser.add_argument("--chat", action="store_true", help="manual trigger: keep asking for messages until you type exit")
+    parser.add_argument("message", nargs="*", help="manual trigger: the input text")
     args = parser.parse_args()
+    global MESSAGE
+    MESSAGE = " ".join(args.message)
     print("Mode: " + ("DRY RUN (set FLOWFORGE_DRY_RUN=0 to run for real)" if DRY_RUN else "LIVE"))
     if args.serve:
         serve(args.port)
+        return
+    if args.chat:
+        while True:
+            try:
+                MESSAGE = input("you> ").strip()
+            except EOFError:
+                break
+            if MESSAGE.lower() in ("exit", "quit", ""):
+                break
+            try:
+                ctx = run()
+            except StepFailed as exc:
+                print("error> step " + exc.step_id + " failed: " + str(exc.error))
+                continue
+            last = list(ctx.values())[-1]
+            print("bot> " + str(last.get("answer", last.get("message", json.dumps(last, default=str)))))
         return
     payload = None
     if args.payload:
         with open(args.payload) as fh:
             payload = json.load(fh)
-    ctx = run(payload)
+    try:
+        ctx = run(payload)
+    except StepFailed as exc:
+        sys.exit("Automation stopped: step '" + exc.step_id + "' failed (" + str(exc.error) + "). No later steps ran.")
     print(json.dumps(ctx, indent=2, default=str))
 
 

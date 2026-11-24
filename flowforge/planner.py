@@ -83,14 +83,16 @@ ACTION_PATTERNS: list[tuple[str, str]] = [
     ("drive_save", r"\b(?:google )?drive\b|\bupload\b"),
     ("sheets_read", r"\b(?:read|get|fetch|pull)\b[^.,;]{0,30}\b(?:rows?|sheet|spreadsheet)\b"),
     ("sheets_append", r"\b(?:spreadsheet|google sheets?|sheet|add a row|new row)\b"),
-    ("send_email", r"\b(?:send (?:an |a |me an |me a )?(?:email|e-mail|mail)|email (?:me|the|him|her|them|it|us|a|back|[\w.+-]+@[\w.-]+)|e-?mail them|reply|thank-you email|thank you email|forward (?:it|them|the emails?)|mail me)\b"),
+    ("send_email", r"\b(?:send (?:an |a |me an |me a )?(?:email|e-mail|mail)|email (?:me|the|him|her|them|it|us|a|back|[\w.+-]+@[\w.-]+)|e-?mail them|reply|thank-you email|thank you email|forward (?:it|them|the emails?)(?![^.,;]{0,12}https?://)|mail me)\b"
+                   r"|\bsend\b[^,;]{0,50}?(?<!receive )(?<!get )\b(?:by )?e-?mail\b(?! (?:arrives|comes))"),
     ("llm_summarize", r"\b(?:summari[sz]e|summary|tl;?dr|classify|translate)\b"),
     ("create_task", r"\b(?:jira|ticket|create (?:a )?task|add (?:a )?task|open an issue)\b"),
     ("calendar_create", r"\b(?:calendar|book a meeting|create (?:a |an )?(?:meeting|event)|schedule a (?:call|meeting))\b"),
-    ("delay", r"\b(?:wait|delay|pause)\b(?:\s+for)?\s+\d+\s*(?:s|sec|seconds?|m|min|minutes?|h|hours?)\b"),
-    ("http_request", r"\b(?:call|hit|fetch|post (?:it )?to|send (?:it )?to|get)\b[^.,;]{0,40}\b(?:api|endpoint|url|https?://\S+)|\bfrom https?://\S+"),
+    ("delay", r"\b(?:wait|delay|pause)\b(?:\s+for)?\s+\d+\s*(?:s|sec|seconds?|m|min|minutes?|h|hours?|d|days?)\b"),
+    ("transform", r"\b(?:convert|reformat|transform|format|uppercase|lowercase|capitali[sz]e)\b(?![^.,;]{0,20}\bfrom https?://)"),
+    ("http_request", r"\b(?:call|hit|fetch|download|pull|post|forward|send|get)\b[^.,;]{0,40}?\b(?:api|endpoint|url|https?://\S+)|\bfrom https?://\S+"),
     ("log_message", r"\blog\b(?![^.,;]{0,30}\b(?:sheet|spreadsheet)\b)"),
-    ("notify", r"\b(?:notify me|let me know|tell me|reply with|respond with|confirm)\b"),
+    ("notify", r"\b(?:notify me|let me know|tell me|reply with|respond with|confirm|remind me|reminder)\b"),
     ("ai_agent", r"\b(?:agent|assistant|chat ?bot|tutor|advisor|answer (?:my |student |customer |user )?questions|"
                  r"research|explain|help (?:me|students|users|people)|solve|plan my|recommend)\b"),
 ]
@@ -131,7 +133,7 @@ def detect_trigger(text: str) -> tuple[str, dict]:
     if re.search(r"\bwebhook\b|\bhttp request\b|\bpost request\b|\bwhen a request\b|\breceives? a (?:post|request)\b|\bapi call comes", t):
         m = re.search(r"(?:path|endpoint|at)\s+/([\w-]+)", text, re.I)
         return "webhook", {"path": m.group(1) if m else "flowforge-hook", "method": "POST"}
-    if re.search(r"\bform\b", t) and re.search(r"submit|fills?|submission|signs? up", t):
+    if re.search(r"\bform\b", t) and re.search(r"submit|fills?|submission|signs? up|complet|\bbooks?\b|using the|through the|via the", t):
         fields = _form_fields(t)
         title = "Contact form"
         m = re.search(r"(?:the |a |my |our )?([\w-]+(?: [\w-]+)?) form", t)
@@ -140,7 +142,8 @@ def detect_trigger(text: str) -> tuple[str, dict]:
         return "form_submitted", {"title": title, "fields": ",".join(fields)}
     if (re.search(r"\b(?:when|whenever|each time|every time|if|once)\b[^.]{0,40}\b(?:e-?mails?|mail|inbox|gmail)\b", t)
             and re.search(r"\b(?:get|gets|receive|receives|arrives?|comes? in|new|lands?)\b", t)) \
-            or re.search(r"\b(?:every|each|all|any)?\s*(?:new|incoming|unread)\s+e-?mails?\b", t):
+            or re.search(r"\b(?:every|each|all|any)?\s*(?:new|incoming|unread)\s+e-?mails?\b", t) \
+            or re.search(r"\b(?:receive|get)\b[^.,]{0,15}\bby e-?mail\b|\be-?mail attachments?\b", t):
         q = []
         if re.search(r"attach", t):
             q.append("has:attachment")
@@ -185,6 +188,8 @@ def parse_schedule(t: str) -> str | None:
         hour = 18
     elif "noon" in t:
         hour = 12
+    elif "midnight" in t:
+        hour = 0
     m = re.search(r"every\s+(\d+)\s*(minutes?|mins?|hours?)", t)
     if m:
         n = int(m.group(1))
@@ -195,7 +200,7 @@ def parse_schedule(t: str) -> str | None:
     for d, n in days.items():
         if re.search(rf"\bevery {d}\b|\bon {d}s\b|\b{d}s\b", t):
             return f"{minute} {hour} * * {n}"
-    if re.search(r"\b(?:every weekday|weekdays)\b", t):
+    if re.search(r"\b(?:every weekday|each weekday|weekdays|monday to friday)\b", t):
         return f"{minute} {hour} * * 1-5"
     if re.search(r"\b(?:every week|weekly)\b", t):
         return f"{minute} {hour} * * 1"
@@ -219,6 +224,8 @@ def _find_actions(segment: str) -> list[tuple[int, str, re.Match]]:
             hits.append((m.start(), typ, m))
             taken.add(typ)
             break
+    if "notify" in taken and "ai_agent" in taken and re.search(r"\bremind(?:er| me)\b", segment, re.I):
+        hits = [h for h in hits if h[1] != "ai_agent"]
     # messaging beats generic notify
     if "notify" in taken and taken & {"slack_message", "discord_message", "teams_message", "sms_message", "send_email"}:
         hits = [h for h in hits if h[1] != "notify"]
@@ -229,9 +236,9 @@ def _find_actions(segment: str) -> list[tuple[int, str, re.Match]]:
         typ, m = h[1], h[2]
         if typ in ("sheets_read", "drive_list", "ai_agent"):  # these produce the content later steps use
             return 0
-        if typ == "http_request" and not re.search(r"\bpost\b|\bsend\b", m.group(0), re.I):
+        if typ == "http_request" and not re.search(r"\bpost\b|\bsend\b|\bforward\b", m.group(0), re.I):
             return 0
-        return 1 if typ == "llm_summarize" else 2
+        return 1 if typ in ("llm_summarize", "transform") else 2
     return sorted(hits, key=lambda h: (stage(h), h[0]))
 
 
@@ -262,6 +269,7 @@ class _Builder:
         self.last_content: str | None = None  # most recent reference worth sending onwards
         self.saved_link: str | None = None
         self.pending: list[str] = []
+        self.transformed: dict[str, str] | None = None  # field -> {{transform.field}} after a transform step
 
     def nid(self, base: str) -> str:
         i, k = base, 2
@@ -333,7 +341,7 @@ class _Builder:
         m = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", seg) or re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", self.request)
         if m:
             return m.group(0).rstrip(".")
-        if re.search(r"\b(?:them|the sender|reply|back|the customer|the person|thank)", seg, re.I):
+        if re.search(r"\b(?:them|the sender|reply|back|the customer|the person|thank|the candidate|the applicant|the user)", seg, re.I):
             if self.trigger_type == "email_received":
                 return "{{trigger.from}}"
             if self.trigger_type == "form_submitted":
@@ -358,7 +366,8 @@ class _Builder:
                 content = self.last_content or self.message_text()
                 stamp = "{{trigger.timestamp}}" if tt == "schedule" else "{{trigger.submitted_at}}" if tt == "form_submitted" else "latest"
                 params = {"file_name": f"flowforge-{stamp}.txt", "content": content, "mime_type": "text/plain"}
-            folder = re.search(r"(?:in|to|into)\s+(?:the|my|our)?\s*[\"']?([\w -]{2,30}?)[\"']?\s+folder", seg + " " + self.t, re.I)
+            folder = re.search(r"\bfolder (?:called|named) [\"']?([\w-]+)", seg + " " + self.t, re.I) or \
+                re.search(r"(?:in|to|into)\s+(?:the|my|our)?\s*[\"']?([\w -]{2,30}?)[\"']?\s+folder", seg + " " + self.t, re.I)
             label = None
             if folder:
                 params["folder_id"] = "{{env.DRIVE_FOLDER_ID}}"
@@ -374,6 +383,8 @@ class _Builder:
         if typ == "sheets_append":
             if tt == "email_received":
                 values = "{{trigger.from}}, {{trigger.subject}}, {{trigger.message_id}}"
+            elif self.transformed:
+                values = ", ".join(self.transformed.values())
             elif tt == "form_submitted":
                 values = ", ".join(f"{{{{trigger.{f}}}}}" for f in self.nodes[0]["params"]["fields"].split(","))
             elif tt == "webhook":
@@ -449,17 +460,33 @@ class _Builder:
             return self.add("calendar_create", {"title": title, "start": start, "duration_minutes": 30,
                                                 "attendees": attendees}, base="create_event")
         if typ == "delay":
-            m = re.search(r"(\d+)\s*(s|sec|seconds?|m|min|minutes?|h|hours?)\b", seg, re.I)
+            m = re.search(r"(\d+)\s*(s|sec|seconds?|m|min|minutes?|h|hours?|d|days?)\b", seg, re.I)
             n = int(m.group(1)) if m else 60
             unit = (m.group(2).lower() if m else "s")[0]
-            return self.add("delay", {"seconds": n * {"s": 1, "m": 60, "h": 3600}[unit]}, base="wait")
+            return self.add("delay", {"seconds": n * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]}, base="wait")
+        if typ == "transform":
+            known = ["name", "email", "phone", "company", "message", "amount", "address", "subject", "status", "rating"]
+            words = [f for f in known if re.search(rf"\b{f}s?\b", seg, re.I)] or ["name", "email"]
+            fields = {f: self.field_ref(f) for f in words}
+            params = {"fields": fields}
+            case = "upper" if re.search(r"upper ?case|capitals|capitali[sz]e", seg, re.I) else \
+                "lower" if re.search(r"lower ?case", seg, re.I) else ""
+            if case:
+                params["case"] = case
+            i = self.add("transform", params, base="transform")
+            self.transformed = {f: f"{{{{{i}.{f}}}}}" for f in fields}
+            self.last_content = json.dumps(self.transformed)
+            return i
         if typ == "http_request":
             url = re.search(r"https?://[^\s,;]+", seg) or re.search(r"https?://[^\s,;]+", self.request)
-            method = "POST" if re.search(r"\bpost\b|\bsend (?:it )?to\b", seg, re.I) else "GET"
+            # the verb right before the URL decides: "post/send/forward ... to <url>" vs "pull/fetch ... from <url>"
+            pre = seg[max(0, url.start() - 45):url.start()] if url and url.re.pattern and url.string is seg else seg
+            method = "POST" if re.search(r"\b(?:post|send|forward|submit|push)\b", pre, re.I) \
+                and not re.search(r"\bfrom\s*$", pre, re.I) else "GET"
             params = {"method": method, "url": url.group(0).rstrip(".") if url else "{{env.API_URL}}"}
             if method == "POST":
                 # forward the whole payload when there is one; otherwise a small JSON event
-                params["body"] = ("{{trigger.body}}" if tt == "webhook" else
+                params["body"] = (self.last_content if self.transformed else "{{trigger.body}}" if tt == "webhook" else
                                   self.last_content if self.last_content else
                                   json.dumps({"event": self.event_text().replace('"', "'")}))
             i = self.add("http_request", params, base="call_api")
@@ -472,6 +499,9 @@ class _Builder:
         if typ == "log_message":
             return self.add("log_message", {"message": self.message_text()}, base="log")
         if typ == "notify":
+            m = re.search(r"\bremind me\b[^.]*?\bto (.+?)(?:\.|$)", self.request, re.I)
+            if m:
+                return self.add("notify", {"message": "Reminder: " + m.group(1).strip()}, label="Reminder", base="remind")
             return self.add("notify", {"message": "Done. " + self.message_text()}, base="notify")
         return None
 

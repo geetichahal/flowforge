@@ -63,6 +63,7 @@ class Report:
 SECRET_PATTERNS = [
     ("Slack webhook", re.compile(r"hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]{8,}")),
     ("Discord webhook", re.compile(r"discord(?:app)?\.com/api/webhooks/\d{6,}/[\w-]{20,}")),
+    ("Teams webhook", re.compile(r"\.webhook\.office\.com/webhookb2/[\w-]+@[\w-]+/IncomingWebhook/[\w-]{16,}/[\w-]+")),
     ("Slack token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}")),
     ("OpenAI-style key", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}")),
     ("AWS access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),

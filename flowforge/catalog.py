@@ -298,11 +298,12 @@ NODES: list[NodeType] = [
     NodeType(
         "transform", "logic", "Transform Data",
         "Build new named fields from templates over earlier outputs.",
-        params=(Param("fields", True, None, "Mapping of new field name -> template", "mapping"),),
+        params=(Param("fields", True, None, "Mapping of new field name -> template", "mapping"),
+                Param("case", False, "", "Change the letter case of every field value", "enum", ("", "upper", "lower"))),
         outputs={},  # one output per key of `fields`
         sample_output={},
         flowise="approximate",
-        keywords=("format", "transform", "combine", "reformat", "extract the"),
+        keywords=("format", "transform", "combine", "reformat", "extract the", "convert", "uppercase", "lowercase"),
     ),
     NodeType(
         "delay", "logic", "Delay",

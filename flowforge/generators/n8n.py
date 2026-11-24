@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import uuid
 
 from .. import catalog
@@ -88,6 +89,14 @@ class N8nBuilder:
                 return [wrap(x) for x in v]
             return v
         return wrap(value)
+
+    @staticmethod
+    def as_text(val):
+        """A message field that is exactly one expression may evaluate to an object: send it as JSON text."""
+        if isinstance(val, str) and val.startswith("={{ ") and val.endswith(" }}") and val.count("{{") == 1:
+            inner = val[4:-3]
+            return "={{ typeof (" + inner + ") === 'string' ? (" + inner + ") : JSON.stringify(" + inner + ") }}"
+        return val
 
     def build(self) -> dict:
         plan = self.plan
@@ -175,14 +184,14 @@ class N8nBuilder:
         if t == "send_email":
             return node("n8n-nodes-base.gmail", 2.1,
                         {"sendTo": p.get("to", ""), "subject": p.get("subject", ""), "emailType": "text",
-                         "message": p.get("body", ""), "options": {}})
+                         "message": self.as_text(p.get("body", "")), "options": {}})
         if t in ("slack_message", "discord_message", "teams_message"):
             key = "content" if t == "discord_message" else "text"
             body = self.expr({key: raw.get(key, "")})
             return node("n8n-nodes-base.httpRequest", 4.2,
                         {"method": "POST", "url": p.get("webhook_url", ""), "sendBody": True,
                          "specifyBody": "keypair",
-                         "bodyParameters": {"parameters": [{"name": key, "value": body[key]}]}, "options": {}})
+                         "bodyParameters": {"parameters": [{"name": key, "value": self.as_text(body[key])}]}, "options": {}})
         if t == "http_request":
             params = {"method": raw.get("method", "GET"), "url": p.get("url", ""), "options": {}}
             if raw.get("body"):
@@ -191,7 +200,7 @@ class N8nBuilder:
             return node("n8n-nodes-base.httpRequest", 4.2, params)
         if t == "sms_message":
             return node("n8n-nodes-base.twilio", 1,
-                        {"from": "={{ $env.TWILIO_FROM_NUMBER }}", "to": p.get("to", ""), "message": p.get("body", ""),
+                        {"from": "={{ $env.TWILIO_FROM_NUMBER }}", "to": p.get("to", ""), "message": self.as_text(p.get("body", "")),
                          "options": {}})
         if t == "notify":
             return node("n8n-nodes-base.set", 3.4, self._set_params({"message": raw.get("message", "")}))
@@ -243,7 +252,7 @@ class N8nBuilder:
             return node("n8n-nodes-base.if", 2, self._if_params(raw))
         if t == "transform":
             fields = raw.get("fields") if isinstance(raw.get("fields"), dict) else {}
-            return node("n8n-nodes-base.set", 3.4, self._set_params(fields))
+            return node("n8n-nodes-base.set", 3.4, self._set_params(fields, raw.get("case") or ""))
         if t == "extract_attachments":
             types = [x.strip().lower() for x in str(raw.get("file_types", "")).split(",") if x.strip()]
             js = ("const types = " + json.dumps(types) + ";\n"
@@ -317,10 +326,19 @@ class N8nBuilder:
                 {"node": b["name"], "type": "main", "index": 0})
         return specs
 
-    def _set_params(self, fields: dict) -> dict:
+    def _set_params(self, fields: dict, case: str = "") -> dict:
         assigns = []
         for k, v in fields.items():
             val = self.expr(v)
+            if case in ("upper", "lower"):
+                method = "toUpperCase" if case == "upper" else "toLowerCase"
+                if isinstance(val, str) and val.startswith("="):
+                    # "=text {{ expr }} more" -> "={{ `text ${expr} more`.toUpperCase() }}"
+                    body = val[1:].replace("`", "\\`")
+                    js = re.sub(r"\{\{\s*(.*?)\s*\}\}", lambda m: "${" + m.group(1) + "}", body)
+                    val = "={{ `" + js + "`." + method + "() }}"
+                else:
+                    val = getattr(str(val), case)()
             assigns.append({"id": _uid("set", k, str(v)), "name": k, "value": val, "type": "string"})
         return {"assignments": {"assignments": assigns}, "options": {}}
 

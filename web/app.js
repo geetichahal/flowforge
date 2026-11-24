@@ -239,6 +239,10 @@ function renderAttempts(r) {
       el("div", { class: "head" }, `Attempt ${a.attempt} · ${a.ok ? "valid" : a.errors.length + " error(s)"} `, el("small", {}, "planner: " + a.source)),
       items.length ? el("ul", {}, items) : null));
   }
+  if (r.removed_steps && r.removed_steps.length) {
+    list.append(el("li", { class: "err" }, el("div", { class: "head" }, "Warning: valid, but not what was asked"),
+      el("div", { class: "muted", text: "Self-correction removed requested steps: " + r.removed_steps.join(", ") })));
+  }
 }
 
 function warningsFor(r, target) {

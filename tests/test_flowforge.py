@@ -176,6 +176,39 @@ def test_python_live_run_hits_real_http_and_respects_approval(tmp_path):
     assert received == [{"email": "ada@example.com"}]
 
 
+def test_python_step_failure_is_reported_and_stops_the_run(tmp_path):
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(500)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_port}/hook"
+    plan = normalize(planner.template_plan(f"when a webhook receives a signup, send it to {url} and notify me on slack"))
+    code = python_gen.generate(plan)["code"]
+    # every step function has an explanatory comment block
+    assert code.count("# Step ") == len(plan["nodes"]) and "# Runs after 'trigger'" in code
+    f = tmp_path / "a.py"
+    f.write_text(code)
+    (tmp_path / "payload.json").write_text(json.dumps({"body": {"email": "ada@example.com"}, "headers": {}, "query": {}}))
+    base = {k: v for k, v in os.environ.items() if not k.startswith("FLOWFORGE_")}
+    r = subprocess.run([sys.executable, "-I", str(f), "--payload", "payload.json"], capture_output=True, text=True,
+                       cwd=tmp_path, env={**base, "FLOWFORGE_DRY_RUN": "0", "FLOWFORGE_AUTO_APPROVE": "1"}, timeout=60)
+    srv.shutdown()
+    assert r.returncode == 1
+    assert "FAILED: HTTPError" in r.stderr and "Automation stopped" in r.stderr and "No later steps ran" in r.stderr
+    # missing configuration in live mode is a reported step failure, not a crash
+    plan2 = normalize(planner.template_plan("when a webhook receives an order, post it to slack"))
+    f.write_text(python_gen.generate(plan2)["code"])
+    r = subprocess.run([sys.executable, "-I", str(f), "--payload", "payload.json"], capture_output=True, text=True,
+                       cwd=tmp_path, env={**base, "FLOWFORGE_DRY_RUN": "0", "FLOWFORGE_AUTO_APPROVE": "1"}, timeout=60)
+    assert r.returncode == 1 and "ConfigError: missing environment variable" in r.stderr, r.stderr
+
+
 # ------------------------------------------------------------------ simulator
 def test_simulation_trace_and_world_state():
     res = simulate(good_plan())
@@ -407,3 +440,134 @@ def test_deploy_wires_variables_credentials_and_tools():
     assert any("SLACK_WEBHOOK_URL" in t for t in d["todo"]) and any("Google Drive" in t for t in d["todo"])
     assert "cred-g" in json.dumps(state["flow"])  # attached inside Flowise only
     assert "cred-g" not in json.dumps(flowise.generate(p)["export"])  # never in the exported file
+
+
+def test_transform_case_in_all_outputs(tmp_path):
+    plan = normalize(planner.template_plan(
+        "Whenever a customer fills in the survey form, convert their name to uppercase and append it to our responses spreadsheet"))
+    assert [n["type"] for n in plan["nodes"]] == ["form_submitted", "transform", "sheets_append"]
+    t = next(n for n in plan["nodes"] if n["type"] == "transform")
+    assert t["params"]["case"] == "upper"
+    sim = simulate(plan)
+    step = next(s for s in sim["trace"] if s["node"] == t["id"])
+    assert step["outputs"]["name"] == step["outputs"]["name"].upper()
+    r = pipeline.run(plan["request"], mode="template")
+    assert r["ok"]
+    fw = json.dumps(r["flowise"]["export"])
+    assert "toUpperCase()" in fw
+    set_node = next(n for n in r["n8n"]["workflow"]["nodes"] if n["type"] == "n8n-nodes-base.set")
+    assert ".toUpperCase() }}" in set_node["parameters"]["assignments"]["assignments"][0]["value"]
+    f = tmp_path / "a.py"
+    f.write_text(r["python"]["code"])
+    env = {k: v for k, v in os.environ.items() if not k.startswith("FLOWFORGE_")}
+    out = subprocess.run([sys.executable, "-I", str(f)], capture_output=True, text=True, env=env, timeout=60)
+    assert out.returncode == 0, out.stderr
+    assert '"GRACE HOPPER"' in out.stdout  # sample form name, uppercased by the transform step
+
+
+@pytest.mark.parametrize("text,types,method", [
+    ("Each weekday at 7:30am, pull the exchange rates from https://api.example.com/rates and send them to finance@example.com by email",
+     ["schedule", "http_request", "send_email"], "GET"),
+    ("When the webhook receives a lead, reformat the payload into JSON with only name and email fields and forward it to https://crm.example.com/api/contacts",
+     ["webhook", "transform", "http_request"], "POST"),
+    ("When a webhook gets a new trial signup, wait 2 days and then send them a follow-up email",
+     ["webhook", "delay", "send_email"], None),
+    ("Remind me every Sunday at 6pm to plan my week", ["schedule", "notify"], None),
+])
+def test_planner_phrasings_from_heldout_set(text, types, method):
+    plan = normalize(planner.template_plan(text))
+    assert [n["type"] for n in plan["nodes"]] == types
+    if method:
+        assert next(n for n in plan["nodes"] if n["type"] == "http_request")["params"]["method"] == method
+
+
+def test_python_messages_send_structured_data_as_text(tmp_path):
+    got = []
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status": "ok", "n": 3}')
+
+        def do_POST(self):
+            got.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_port}"
+    plan = normalize(planner.template_plan(f"call {base}/status and post it to slack"))
+    f = tmp_path / "a.py"
+    f.write_text(python_gen.generate(plan)["code"])
+    env = {k: v for k, v in os.environ.items() if not k.startswith("FLOWFORGE_")}
+    r = subprocess.run([sys.executable, "-I", str(f)], capture_output=True, text=True, timeout=60, cwd=tmp_path,
+                       env={**env, "FLOWFORGE_DRY_RUN": "0", "FLOWFORGE_AUTO_APPROVE": "1", "SLACK_WEBHOOK_URL": f"{base}/hook"})
+    srv.shutdown()
+    assert r.returncode == 0, r.stderr
+    assert isinstance(got[0]["text"], str) and json.loads(got[0]["text"]) == {"status": "ok", "n": 3}
+    wf = n8n.generate(plan)["workflow"]
+    slack = next(n for n in wf["nodes"] if n["name"].startswith("Slack"))
+    assert "JSON.stringify" in slack["parameters"]["bodyParameters"]["parameters"][0]["value"]
+
+
+def test_simulator_never_touches_the_network(monkeypatch):
+    import socket
+
+    def refuse(*a, **k):
+        raise AssertionError("simulator tried to open a network connection")
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    plan = normalize(planner.template_plan(
+        "when I get an email with an invoice attached, save it to Drive, add a row to the spreadsheet, "
+        "email me and ping me on Slack"))
+    types = {n["type"] for n in plan["nodes"]}
+    assert {"email_received", "drive_save", "sheets_append", "send_email", "slack_message"} <= types
+    sim = simulate(plan)
+    assert sim["ok"] and all(s["status"] == "ok" for s in sim["trace"])
+    for s in sim["trace"]:  # every step records inputs and outputs
+        assert "inputs" in s and "outputs" in s
+
+
+def test_teams_webhook_literal_is_flagged():
+    plan = normalize(planner.template_plan("when a webhook receives an order, post it to microsoft teams"))
+    teams = next(n for n in plan["nodes"] if n["type"] == "teams_message")
+    teams["params"]["text"] = "see https://contoso.webhook.office.com/webhookb2/" + "a1b2c3d4-0000-1111-2222-333344445555@" \
+        + "9f8e7d6c-0000-1111-2222-333344445555/IncomingWebhook/" + "0123456789abcdef0123456789abcdef/" + "77776666-5555-4444"
+    assert "E_EMBEDDED_CREDENTIAL" in {i.code for i in validate_plan(plan).errors}
+
+
+def test_repair_that_drops_a_step_is_not_reported_as_faithful():
+    plan = {"nodes": [{"id": "trigger", "type": "webhook", "params": {"path": "a"}},
+                      {"id": "beam", "type": "teleport_to_mars", "params": {}}],
+            "edges": [{"from": "trigger", "to": "beam"}]}
+    r = pipeline.run("beam me up", mode="template", plan_override=plan)
+    assert r["ok"] and not r["faithful"]
+    assert r["removed_steps"] == ["beam (teleport_to_mars)"]
+    good = pipeline.run("when a webhook receives an order, post it to slack", mode="template")
+    assert good["faithful"] and good["removed_steps"] == []
+    injected = pipeline.run("when a webhook receives an order, post it to slack", mode="template", inject_fault=True)
+    assert injected["ok"] and injected["faithful"]  # repaired back to the same steps
+
+
+def test_simulated_email_trigger_matches_any_query():
+    # The LLM planner's plan for held-out request G10, verbatim: its query matches no stored mock email.
+    plan = normalize({"name": "G10", "nodes": [
+        {"id": "trigger", "type": "email_received", "params": {"query": "subject:receipt from:shop@example.com has:attachment"}},
+        {"id": "extract_attachments", "type": "extract_attachments", "params": {"source": "{{trigger.attachments}}", "file_types": "pdf"}},
+        {"id": "save_to_drive", "type": "drive_save", "params": {"file_name": "{{extract_attachments.first_name}}",
+                                                                "content": "{{extract_attachments.first_content}}", "mime_type": "application/pdf"}},
+        {"id": "log_to_sheet", "type": "sheets_append", "params": {"spreadsheet_id": "{{env.SHEET_ID}}", "range": "Sheet1!A1",
+                                                                  "values": ["{{trigger.subject}}", "{{save_to_drive.link}}"]}}],
+        "edges": [{"from": "trigger", "to": "extract_attachments"}, {"from": "extract_attachments", "to": "save_to_drive"},
+                  {"from": "save_to_drive", "to": "log_to_sheet"}]})
+    sim = simulate(plan)
+    assert sim["ok"], sim["error"]
+    t = sim["trace"][0]
+    assert "receipt" in t["outputs"]["subject"].lower() and t["outputs"]["from"] == "shop@example.com"
+    assert "generated to match query" in t["note"]
+    assert all(s["status"] == "ok" for s in sim["trace"])

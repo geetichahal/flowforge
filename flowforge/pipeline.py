@@ -40,6 +40,7 @@ def run(request: str, mode: str = "auto", max_attempts: int = MAX_ATTEMPTS,
         plan, source, note = planner.plan(request, mode)
     plan = normalize(plan)
     plan.setdefault("request", request)
+    original = [(n.get("id"), n.get("type")) for n in plan.get("nodes", []) if isinstance(n, dict)]
     attempts = []
     if inject_fault:
         plan, faults = planner.inject_fault(plan)
@@ -63,8 +64,13 @@ def run(request: str, mode: str = "auto", max_attempts: int = MAX_ATTEMPTS,
         attempts[-1]["revision"] = actions
 
     sim = simulate(plan) if report.ok else None
+    # A repair that deletes a step yields a valid plan that no longer does what was asked: say so.
+    final_ids = {n.get("id") for n in plan.get("nodes", []) if isinstance(n, dict)}
+    removed = [f"{nid} ({typ})" for nid, typ in original if nid not in final_ids]
     return {
         "ok": report.ok,
+        "removed_steps": removed,
+        "faithful": report.ok and not removed,
         "request": request,
         "planner_note": note,
         "plan": plan,

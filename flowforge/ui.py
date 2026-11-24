@@ -59,7 +59,10 @@ def generate(request: str, mode: str, inject: bool):
         raise gr.Error("Type an automation request first.")
     r = pipeline.run(request, mode=mode, inject_fault=inject)
     state = r
-    status = (f"### {'✅ Verified' if r['ok'] else '❌ Could not produce a valid automation'} in "
+    head = ("❌ Could not produce a valid automation" if not r["ok"] else
+            "⚠️ Valid, but self-correction removed requested steps: " + ", ".join(r["removed_steps"])
+            if r.get("removed_steps") else "✅ Verified")
+    status = (f"### {head} in "
               f"{len([a for a in r['attempts'] if a['source'] != 'fault-injection'])} attempt(s) · {r['seconds']}s")
     if not r["ok"]:
         return (state, status, _attempts_md(r), r["plan_summary"], r["plan"], "", "", "", r["report_text"], "",

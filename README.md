@@ -19,6 +19,21 @@
 
 Everything is free and local. No API key is needed to build, run, test or demo it.
 
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/COMPLETION_CHECKLIST.md](docs/COMPLETION_CHECKLIST.md) | Objective-by-objective status, implementing module, test performed, limitations |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, plan format, planner, self-correction, generators, validator, simulator |
+| [docs/SETUP.md](docs/SETUP.md) | Installation (core, Ollama, Flowise, n8n) and troubleshooting |
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Dashboard, CLI, REST API, using the three outputs |
+| [docs/DEMO.md](docs/DEMO.md) | Step-by-step demonstration procedure for evaluators |
+| [docs/SAFETY.md](docs/SAFETY.md) | Safety model and its limits |
+| [docs/EVALUATION.md](docs/EVALUATION.md) | Evaluation report: datasets, metrics, measured results, failures |
+| [docs/VIVA.md](docs/VIVA.md) | Viva preparation: 30-second explanation, objective-to-evidence table, likely questions and answers, 5-minute demo |
+| [docs/NODE_CATALOG.md](docs/NODE_CATALOG.md) | The 25 node types with params and their real Flowise / n8n nodes |
+| [docs/evidence/](docs/evidence/) | Recorded runs: Flowise import + execution, n8n import + execution, API smoke test, dashboard check |
+
 **Try it in your browser:** https://geetichahal.github.io/flowforge/. No install needed; the engine runs in the page. Watch self-correction with [this demo link](https://geetichahal.github.io/flowforge/?q=when%20a%20webhook%20receives%20an%20order%2C%20if%20the%20amount%20is%20over%20100%20post%20to%20slack%20otherwise%20add%20a%20row%20to%20the%20spreadsheet&fault=1&tab=tab-sim).
 
 ## Quick start
@@ -133,9 +148,9 @@ flowforge/
   data/flowise_node_specs.json   exact node definitions dumped from the Flowise build
   api.py, ui.py, cli.py, evaluate.py, flowise_client.py
 tools/dump_flowise_specs.js      regenerates the specs from a built Flowise checkout
-eval/requests.json               18 fixed requests; results-template.md is the latest run
+eval/requests.json               22 fixed development requests; requests-heldout*.json: 2 × 15 held-out requests
 examples/                        committed outputs for two requests
-tests/test_flowforge.py          39 tests
+tests/test_flowforge.py          50 tests
 web/                             the website (index.html, app.js, styles.css)
 tools/build_site.py              static, server-free build of the website
 ```
@@ -149,7 +164,11 @@ The Flowise generator doesn't hand-write node JSON. `tools/dump_flowise_specs.js
 - 7 generated agentflows were created via `POST /api/v1/chatflows` and read back. One was created via the UI's import endpoint `POST /api/v1/export-import/import` (`{"message":"success"}`).
 - **Execution in Flowise's runtime:** the request *"when a webhook receives an order, if the amount is over 100 post it to …/big-orders otherwise post it to …/small-orders"* was generated and triggered through `POST /api/v1/webhook/<flowId>`. Every node reported `FINISHED`. The receiving server got `{"order_id":"A-250","amount":250}` on `/big-orders` and `{"order_id":"A-40","amount":40}` on `/small-orders`. (Flowise blocks requests to localhost by default; `HTTP_SECURITY_CHECK=false` was set on the test instance only.)
 
-**Not verified:** flows that need Google/Slack/Jira credentials or a chat model were imported, but not executed. The canvas UI rendering was not checked in a browser. **n8n output was checked only by FlowForge's own structural validator** (there's no n8n instance here). Node types/versions follow n8n's published formats, so import it once before the demo.
+**Re-verified on 2026-11-24** with `tools/flowise_demo.py` (Flowise 3.1.4, import + webhook execution, PASS) and `tools/flowise_import_all.py` (all 52 evaluation flows created, read back unchanged and deleted). See `docs/evidence/`.
+
+**n8n (2.49.5, installed from npm) — `tools/n8n_check.py`:** all 52 evaluation workflows pass a check against n8n's own node registry (type exists, `typeVersion` supported, parameter names real), all 52 import with `n8n import:workflow` and export back unchanged, and one generated workflow (HTTP GET → Slack message) was executed with `n8n execute` against a local receiver.
+
+**Not verified:** flows that need Google/Slack/Jira credentials or a chat model were imported but not executed, in both Flowise and n8n. The Flowise canvas UI rendering was not checked in a browser.
 
 ### Corrections to `FLOWISE-INTEGRATION.md` (found in the source)
 
@@ -170,13 +189,19 @@ Still true: there's no email-arrival trigger (FlowForge emits a 5-minute schedul
 - **No credentials in output.** Secret parameters must be `{{env.NAME}}` references (`E_LITERAL_SECRET`). All outputs are scanned for token patterns (Slack/Discord webhooks, `sk-`, AWS, GitHub, Google keys, bearer tokens, private keys, `password=`). No Flowise credential ids or n8n `credentials` blocks are emitted.
 - **Flowise push is opt-in.** The API requires `confirm: true`, and the CLI/UI only push on an explicit command or button.
 
-## Evaluation (template planner, `eval/results-template.md`)
+## Evaluation
 
-22 requests covering open-ended agent tasks, email, storage, spreadsheets, messaging, schedules, webhooks, forms, branches, delays and multi-step chains. All 18 pass every metric: intent, plan validity, Flowise/n8n validity, Python parse, **Python dry-run executed in a subprocess**, simulation, and repair of injected faults. A repair counts only if the repaired plan has the same steps *and* the same dry-run behavior as the unfaulted plan.
+Full report: [docs/EVALUATION.md](docs/EVALUATION.md). Three fixed request sets: 22 development requests, and two held-out sets of 15 requests each. Per-request results are in `eval/results-*.md`.
 
-An earlier version of this metric counted any valid result as repaired. Under the stricter definition, that version of the repairer scored **10/18**: it deleted steps it couldn't identify, and it refilled a lost `greater_than` with the default `contains`, which flipped a branch. Both are fixed and have regression tests. The 18/18 above is the stricter number.
+| Planner | Set | Right steps (`intent`) | Plan, Flowise, n8n, Python parse + dry-run valid | Simulation | Fault repair |
+|---|---|---|---|---|---|
+| Template | development (22, tuned) | 22/22 | 22/22 | 22/22 | 22/22 |
+| Template | held-out 1, before fixes | 5/15 | 15/15 | 15/15 | 15/15 |
+| Template | **held-out 2, untuned** | **11/15** | 15/15 | 15/15 | 15/15 |
+| LLM `qwen3:4b` | held-out 1 | 14/15 | 15/15 | 15/15 | 15/15 |
+| LLM `qwen3:4b` | held-out 2 | 14/15 | 15/15 | 15/15 | 15/15 |
 
-Read that number carefully: **the requests were written alongside the template planner, so 100% measures the pipeline's correctness on known phrasings, not generalization.** Six extra phrasings tried during development exposed planner gaps (missing an email trigger without "when", misordered fetch → post, "translate … forward"). Those were fixed, so they're no longer a held-out test either. **LLM planner (`eval/results-llm.md`, qwen3:4b via Ollama on an Apple-silicon Mac):** intent 18/18, plan/Flowise/n8n/Python/dry-run/simulation 18/18, repair 17/18. In R07, after the injected faults, the repaired plan was valid but had different steps. Three requests (R05, R10, R15) needed a second attempt, where the model revised its plan from the validator's errors. The full run took 1,101 s for 18 requests, each also re-run with injected faults. The same caveat applies: these are known phrasings, and R01 is the worked example inside the planner prompt.
+The rule-based planner builds valid, runnable artefacts every time, but it picks the right steps only for phrasings it has rules for. The LLM planner generalises better, at about 1 minute per request. Every plan's Flowise and n8n output was also imported into real Flowise 3.1.4 and n8n 2.49.5 (52/52 each), and one flow of each was executed in that platform's runtime (`docs/evidence/`).
 
 ## Node catalog (25)
 

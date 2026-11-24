@@ -34,13 +34,31 @@ TIMEOUT = 30
 REF = re.compile(r"\{\{\s*([A-Za-z_]\w*)((?:\.[\w-]+)*)\s*\}\}")
 
 
+class ConfigError(Exception):
+    """A required environment variable is missing."""
+
+
+class StepFailed(Exception):
+    """A workflow step raised an error; carries the step id and the original exception."""
+
+    def __init__(self, step_id, error):
+        super().__init__(step_id + ": " + type(error).__name__ + ": " + str(error))
+        self.step_id = step_id
+        self.error = error
+
+
+def as_text(value):
+    """Message bodies must be text: structured data (an API response, a list of rows) is sent as JSON."""
+    return value if isinstance(value, str) else json.dumps(value, default=str)
+
+
 def env(name):
     """Read configuration from the environment. Secrets never live in this file."""
     value = os.environ.get(name)
     if not value:
         if DRY_RUN:
             return "<" + name + ">"
-        sys.exit("Missing environment variable " + name)
+        raise ConfigError("missing environment variable " + name)
     return value
 
 
@@ -89,7 +107,7 @@ def approve(action):
 
 def http(method, url, **kwargs):
     if requests is None:
-        sys.exit("Install requests to run for real: pip install requests")
+        raise RuntimeError("Install requests to run for real: pip install requests")
     response = requests.request(method, url, timeout=TIMEOUT, **kwargs)
     response.raise_for_status()
     return response
@@ -138,6 +156,10 @@ FORM_TITLE = ''
 CRON = ''
 
 
+# Step 1 of 4: Webhook (webhook)
+# Start when an HTTP request is sent to the automation's webhook URL.
+# Trigger: starts the workflow; its output is available to later steps as {{trigger.<field>}}.
+# Produces: body, headers, query
 def step_trigger(ctx):
     """Webhook: Start when an HTTP request is sent to the automation's webhook URL."""
     PARAMS = {'path': 'flowforge-hook', 'method': 'POST'}
@@ -153,6 +175,11 @@ def step_trigger(ctx):
     return SAMPLE
 
 
+# Step 2 of 4: If amount is over 100 (condition)
+# Branch: follow the 'true' edge when the check passes, otherwise the 'false' edge.
+# Runs after 'trigger'.
+# Uses data: trigger.body.amount
+# Produces: result
 def step_check(ctx):
     """If amount is over 100: Branch: follow the 'true' edge when the check passes, otherwise the 'false' edge."""
     PARAMS = {'field': '{{trigger.body.amount}}', 'operator': 'greater_than', 'value': '100'}
@@ -163,6 +190,11 @@ def step_check(ctx):
     return {"result": result}
 
 
+# Step 3 of 4: HTTP Request (http_request)
+# Call any HTTP API.
+# Runs after 'check' (when its check is true).
+# Uses data: trigger.body
+# Produces: body, status
 def step_call_api(ctx):
     """HTTP Request: Call any HTTP API."""
     PARAMS = {'method': 'POST', 'url': 'http://127.0.0.1:8799/big-orders', 'body': '{{trigger.body}}'}
@@ -181,6 +213,11 @@ def step_call_api(ctx):
     return {"status": res.status_code, "body": body}
 
 
+# Step 4 of 4: HTTP Request (http_request)
+# Call any HTTP API.
+# Runs after 'check' (when its check is false).
+# Uses data: trigger.body
+# Produces: body, status
 def step_call_api_2(ctx):
     """HTTP Request: Call any HTTP API."""
     PARAMS = {'method': 'POST', 'url': 'http://127.0.0.1:8799/small-orders', 'body': '{{trigger.body}}'}
@@ -241,11 +278,17 @@ def serve(port):
                 except ValueError:
                     body = {"raw": raw}
                 trigger = {"body": body, "headers": dict(self.headers), "query": {k: v[0] for k, v in parse_qs(url.query).items()}}
-            ctx = run(trigger)
+            try:
+                ctx = run(trigger)
+            except StepFailed as exc:
+                return self._reply(500, json.dumps({"ok": False, "failed_step": exc.step_id, "error": str(exc.error)}))
             self._reply(200, json.dumps({"ok": True, "steps": list(ctx)}, default=str))
 
     print("Listening on http://localhost:%d/%s" % (port, WEBHOOK_PATH or ""))
     HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+
+
+MESSAGE = ""
 
 
 def run(trigger_output=None):
@@ -262,7 +305,11 @@ def run(trigger_output=None):
             print("[" + step_id + "] skipped (branch not taken)")
             continue
         print("[" + step_id + "] running")
-        ctx[step_id] = fn(ctx)
+        try:
+            ctx[step_id] = fn(ctx)
+        except Exception as exc:  # stop at the first failing step; later steps depend on its output
+            print("[" + step_id + "] FAILED: " + type(exc).__name__ + ": " + str(exc), file=sys.stderr)
+            raise StepFailed(step_id, exc) from exc
     return ctx
 
 
@@ -271,16 +318,39 @@ def main():
     parser.add_argument("--payload", help="JSON file used as the trigger output (skips the trigger)")
     parser.add_argument("--serve", action="store_true", help="for webhook/form triggers: listen for requests")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8765")))
+    parser.add_argument("--chat", action="store_true", help="manual trigger: keep asking for messages until you type exit")
+    parser.add_argument("message", nargs="*", help="manual trigger: the input text")
     args = parser.parse_args()
+    global MESSAGE
+    MESSAGE = " ".join(args.message)
     print("Mode: " + ("DRY RUN (set FLOWFORGE_DRY_RUN=0 to run for real)" if DRY_RUN else "LIVE"))
     if args.serve:
         serve(args.port)
+        return
+    if args.chat:
+        while True:
+            try:
+                MESSAGE = input("you> ").strip()
+            except EOFError:
+                break
+            if MESSAGE.lower() in ("exit", "quit", ""):
+                break
+            try:
+                ctx = run()
+            except StepFailed as exc:
+                print("error> step " + exc.step_id + " failed: " + str(exc.error))
+                continue
+            last = list(ctx.values())[-1]
+            print("bot> " + str(last.get("answer", last.get("message", json.dumps(last, default=str)))))
         return
     payload = None
     if args.payload:
         with open(args.payload) as fh:
             payload = json.load(fh)
-    ctx = run(payload)
+    try:
+        ctx = run(payload)
+    except StepFailed as exc:
+        sys.exit("Automation stopped: step '" + exc.step_id + "' failed (" + str(exc.error) + "). No later steps ran.")
     print(json.dumps(ctx, indent=2, default=str))
 
 

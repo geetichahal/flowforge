@@ -22,16 +22,37 @@ class MockEmail:
     inbox: list[dict] = field(default_factory=lambda: [copy.deepcopy(catalog.CATALOG["email_received"].sample_output)])
     outbox: list[dict] = field(default_factory=list)
 
+    @staticmethod
+    def _filters(query: str) -> tuple[bool, list[str], list[str]]:
+        q = (query or "").lower().split()
+        subj = [w.split(":", 1)[1].strip('"') for w in q if w.startswith("subject:")]
+        frm = [w.split(":", 1)[1].strip('"') for w in q if w.startswith("from:")]
+        return "has:attachment" in q, subj, frm
+
     def newest(self, query: str) -> dict | None:
-        q = (query or "").lower()
+        attach, subj, frm = self._filters(query)
         for m in self.inbox:
-            if "has:attachment" in q and not m.get("has_attachments"):
+            if attach and not m.get("has_attachments"):
                 continue
-            words = [w.split(":", 1)[1] for w in q.split() if w.startswith("subject:")]
-            if any(w.strip('"') not in m["subject"].lower() for w in words):
+            if any(w not in m["subject"].lower() for w in subj):
+                continue
+            if any(w not in m["from"].lower() for w in frm):
                 continue
             return m
         return None
+
+    def sample_matching(self, query: str) -> dict:
+        """A test email built to match the trigger's query (used when the stored mock inbox has none)."""
+        attach, subj, frm = self._filters(query)
+        m = copy.deepcopy(catalog.CATALOG["email_received"].sample_output)
+        if subj:
+            m["subject"] = " ".join(w.title() for w in subj) + " #1042"
+        if frm:
+            m["from"] = frm[0]
+        if attach and not m.get("has_attachments"):
+            m["has_attachments"] = True
+        self.inbox.append(m)
+        return m
 
     def send(self, to, subject, body) -> dict:
         msg = {"message_id": f"sent-{len(self.outbox) + 1}", "to": to, "subject": subject, "body": body}
@@ -205,9 +226,11 @@ def execute(node: dict, p: dict, world: MockWorld) -> tuple[dict, str]:
         return out, f"form '{p.get('title')}' submitted"
     if t == "email_received":
         m = world.email.newest(p.get("query", ""))
-        if m is None:
-            raise RuntimeError(f"no mock email matches query {p.get('query')!r}")
-        return copy.deepcopy(m), f"email '{m['subject']}' from {m['from']}"
+        note = ""
+        if m is None:  # the trigger fires by definition in a dry run: make the event it waits for
+            m = world.email.sample_matching(p.get("query", ""))
+            note = f" (test email generated to match query {p.get('query')!r})"
+        return copy.deepcopy(m), f"email '{m['subject']}' from {m['from']}{note}"
     if t == "send_email":
         return world.email.send(p["to"], p["subject"], p["body"]), f"mock email sent to {p['to']}"
     if t in ("slack_message", "discord_message", "teams_message"):
@@ -248,7 +271,11 @@ def execute(node: dict, p: dict, world: MockWorld) -> tuple[dict, str]:
         res = check(p.get("field"), p.get("operator", "contains"), p.get("value", ""))
         return {"result": res}, f"{str(p.get('field'))[:50]!r} {p.get('operator')} {p.get('value')!r} -> {res}"
     if t == "transform":
-        return dict(p.get("fields") or {}), "fields built"
+        out = dict(p.get("fields") or {})
+        case = p.get("case") or ""
+        if case in ("upper", "lower"):
+            out = {k: (getattr(str(v), case)()) for k, v in out.items()}
+        return out, "fields built" + (f" ({case}case)" if case else "")
     if t == "delay":
         return {"waited": p.get("seconds")}, f"would wait {p.get('seconds')}s (skipped in simulation)"
     if t == "llm_summarize":

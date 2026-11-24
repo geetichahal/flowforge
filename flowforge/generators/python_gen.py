@@ -38,13 +38,31 @@ TIMEOUT = 30
 REF = re.compile(r"\{\{\s*([A-Za-z_]\w*)((?:\.[\w-]+)*)\s*\}\}")
 
 
+class ConfigError(Exception):
+    """A required environment variable is missing."""
+
+
+class StepFailed(Exception):
+    """A workflow step raised an error; carries the step id and the original exception."""
+
+    def __init__(self, step_id, error):
+        super().__init__(step_id + ": " + type(error).__name__ + ": " + str(error))
+        self.step_id = step_id
+        self.error = error
+
+
+def as_text(value):
+    """Message bodies must be text: structured data (an API response, a list of rows) is sent as JSON."""
+    return value if isinstance(value, str) else json.dumps(value, default=str)
+
+
 def env(name):
     """Read configuration from the environment. Secrets never live in this file."""
     value = os.environ.get(name)
     if not value:
         if DRY_RUN:
             return "<" + name + ">"
-        sys.exit("Missing environment variable " + name)
+        raise ConfigError("missing environment variable " + name)
     return value
 
 
@@ -93,7 +111,7 @@ def approve(action):
 
 def http(method, url, **kwargs):
     if requests is None:
-        sys.exit("Install requests to run for real: pip install requests")
+        raise RuntimeError("Install requests to run for real: pip install requests")
     response = requests.request(method, url, timeout=TIMEOUT, **kwargs)
     response.raise_for_status()
     return response
@@ -154,7 +172,11 @@ def run(trigger_output=None):
             print("[" + step_id + "] skipped (branch not taken)")
             continue
         print("[" + step_id + "] running")
-        ctx[step_id] = fn(ctx)
+        try:
+            ctx[step_id] = fn(ctx)
+        except Exception as exc:  # stop at the first failing step; later steps depend on its output
+            print("[" + step_id + "] FAILED: " + type(exc).__name__ + ": " + str(exc), file=sys.stderr)
+            raise StepFailed(step_id, exc) from exc
     return ctx
 
 
@@ -180,7 +202,11 @@ def main():
                 break
             if MESSAGE.lower() in ("exit", "quit", ""):
                 break
-            ctx = run()
+            try:
+                ctx = run()
+            except StepFailed as exc:
+                print("error> step " + exc.step_id + " failed: " + str(exc.error))
+                continue
             last = list(ctx.values())[-1]
             print("bot> " + str(last.get("answer", last.get("message", json.dumps(last, default=str)))))
         return
@@ -188,7 +214,10 @@ def main():
     if args.payload:
         with open(args.payload) as fh:
             payload = json.load(fh)
-    ctx = run(payload)
+    try:
+        ctx = run(payload)
+    except StepFailed as exc:
+        sys.exit("Automation stopped: step '" + exc.step_id + "' failed (" + str(exc.error) + "). No later steps ran.")
     print(json.dumps(ctx, indent=2, default=str))
 
 
@@ -239,7 +268,10 @@ def serve(port):
                 except ValueError:
                     body = {"raw": raw}
                 trigger = {"body": body, "headers": dict(self.headers), "query": {k: v[0] for k, v in parse_qs(url.query).items()}}
-            ctx = run(trigger)
+            try:
+                ctx = run(trigger)
+            except StepFailed as exc:
+                return self._reply(500, json.dumps({"ok": False, "failed_step": exc.step_id, "error": str(exc.error)}))
             self._reply(200, json.dumps({"ok": True, "steps": list(ctx)}, default=str))
 
     print("Listening on http://localhost:%d/%s" % (port, WEBHOOK_PATH or ""))
@@ -272,7 +304,7 @@ BODIES: dict[str, str] = {
         base = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
         listing = http("GET", base, headers=google_headers(), params={"q": p["query"], "maxResults": 1}).json()
         if not listing.get("messages"):
-            sys.exit("No email matches " + repr(p["query"]))
+            raise LookupError("No email matches " + repr(p["query"]))
         msg_id = listing["messages"][0]["id"]
         msg = http("GET", base + "/" + msg_id, headers=google_headers(), params={"format": "full"}).json()
         headers = {h["name"].lower(): h["value"] for h in msg["payload"].get("headers", [])}
@@ -295,7 +327,7 @@ BODIES: dict[str, str] = {
             return SAMPLE
         mail = EmailMessage()
         mail["To"], mail["Subject"] = p["to"], p["subject"]
-        mail.set_content(str(p["body"]))
+        mail.set_content(as_text(p["body"]))
         raw = base64.urlsafe_b64encode(mail.as_bytes()).decode()
         sent = http("POST", "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
                     headers=google_headers(), json={"raw": raw}).json()
@@ -304,19 +336,19 @@ BODIES: dict[str, str] = {
     "slack_message": '''
         if not approve("post to Slack: " + repr(str(p["text"])[:80])):
             return SAMPLE
-        http("POST", p["webhook_url"], json={"text": p["text"]})
+        http("POST", p["webhook_url"], json={"text": as_text(p["text"])})
         return {"ok": True}
     ''',
     "discord_message": '''
         if not approve("post to Discord: " + repr(str(p["content"])[:80])):
             return SAMPLE
-        http("POST", p["webhook_url"], json={"content": p["content"]})
+        http("POST", p["webhook_url"], json={"content": as_text(p["content"])})
         return {"ok": True}
     ''',
     "teams_message": '''
         if not approve("post to Microsoft Teams: " + repr(str(p["text"])[:80])):
             return SAMPLE
-        http("POST", p["webhook_url"], json={"text": p["text"]})
+        http("POST", p["webhook_url"], json={"text": as_text(p["text"])})
         return {"ok": True}
     ''',
     "sms_message": '''
@@ -325,7 +357,7 @@ BODIES: dict[str, str] = {
         sid = env("TWILIO_ACCOUNT_SID")
         res = http("POST", "https://api.twilio.com/2010-04-01/Accounts/" + sid + "/Messages.json",
                    auth=(sid, env("TWILIO_AUTH_TOKEN")),
-                   data={"From": env("TWILIO_FROM_NUMBER"), "To": p["to"], "Body": p["body"]}).json()
+                   data={"From": env("TWILIO_FROM_NUMBER"), "To": p["to"], "Body": as_text(p["body"])}).json()
         return {"sid": res.get("sid", "")}
     ''',
     "notify": '''
@@ -355,7 +387,7 @@ BODIES: dict[str, str] = {
     "drive_save": '''
         if not approve("upload " + repr(p["file_name"]) + " to Google Drive"):
             return SAMPLE
-        content = p["content"] if isinstance(p["content"], bytes) else str(p["content"]).encode()
+        content = p["content"] if isinstance(p["content"], bytes) else as_text(p["content"]).encode()
         meta = {"name": p["file_name"]}
         if p.get("folder_id"):
             meta["parents"] = [p["folder_id"]]
@@ -403,7 +435,11 @@ BODIES: dict[str, str] = {
         return {"result": result}
     ''',
     "transform": '''
-        return dict(p["fields"])
+        out = dict(p["fields"])
+        case = p.get("case") or ""
+        if case in ("upper", "lower"):  # optional letter-case change applied to every field
+            out = {k: getattr(str(v), case)() for k, v in out.items()}
+        return out
     ''',
     "delay": '''
         seconds = float(p["seconds"])
@@ -420,7 +456,7 @@ BODIES: dict[str, str] = {
         host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
         res = http("POST", host + "/api/generate", json={
             "model": p["model"], "stream": False,
-            "prompt": str(p["instruction"]) + "\\n\\n" + str(p["text"])}).json()
+            "prompt": str(p["instruction"]) + "\\n\\n" + as_text(p["text"])}).json()
         return {"summary": res.get("response", "").strip()}
     ''',
     "ai_agent": '''
@@ -552,6 +588,27 @@ ENV_HINTS = {
 }
 
 
+def _step_comment(plan: dict, nodes: dict, order: list, nid: str) -> list[str]:
+    """Comment block above each step function: what it does, when it runs, what data it uses and produces."""
+    n, nt = nodes[nid], catalog.get(nodes[nid]["type"])
+    real = [x for x in order if x in nodes and catalog.get(nodes[x]["type"])]
+    lines = [f"# Step {real.index(nid) + 1} of {len(real)}: {n.get('label') or nt.label} ({n['type']})",
+             f"# {nt.description}"]
+    incoming = [e for e in plan["edges"] if e["to"] == nid]
+    if not incoming:
+        lines.append("# Trigger: starts the workflow; its output is available to later steps as {{" + nid + ".<field>}}.")
+    else:
+        cond = [f"'{e['from']}'" + (f" (when its check is {e['branch']})" if e.get("branch") else "") for e in incoming]
+        lines.append("# Runs after " + " or ".join(cond) + ".")
+    used = sorted({root + ("." + ".".join(path) if path else "") for root, path in refs_in(n.get("params", {}))})
+    if used:
+        lines.append("# Uses data: " + ", ".join(used))
+    outs = sorted(catalog.outputs_for(n))
+    if outs:
+        lines.append("# Produces: " + ", ".join(outs))
+    return [textwrap.shorten(l, 118, placeholder=" …") if len(l) > 118 else l for l in lines]
+
+
 def func_name(node_id: str) -> str:
     return f"step_{node_id}"
 
@@ -613,7 +670,7 @@ def generate(plan: dict) -> dict:
             body = body.format(cron=n["params"].get("cron", ""))
         params_src = pprint.pformat(n["params"], indent=4, width=100, sort_dicts=False)
         label = n.get("label") or nt.label
-        fn = [f"def {func_name(nid)}(ctx):",
+        fn = _step_comment(plan, nodes, order, nid) + [f"def {func_name(nid)}(ctx):",
               f'    """{label}: {nt.description}"""',
               "    PARAMS = " + textwrap.indent(params_src, "    ").lstrip(),
               "    SAMPLE = " + textwrap.indent(pprint.pformat(_sample(n), indent=4, width=100, sort_dicts=False), "    ").lstrip(),

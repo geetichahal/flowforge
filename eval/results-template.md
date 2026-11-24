@@ -1,6 +1,8 @@
-# FlowForge evaluation (template planner)
+# FlowForge evaluation (template planner, `requests.json`)
 
-22 requests · run 2026-11-24 17:20 · 2.5s
+22 requests · run 2026-11-25 00:23 · 3.2s
+
+First-attempt planner per request: template ×22
 
 | Metric | Passed | Rate |
 |---|---|---|

@@ -415,8 +415,11 @@ class FlowiseBuilder:
             if t == "transform":
                 fields = p.get("fields") if isinstance(p.get("fields"), dict) else {}
                 inp["customFunctionInputVariables"] = [{"variableName": k, "variableValue": html(v)} for k, v in fields.items()]
+                case = p.get("case") or ""
+                wrap = (lambda k: f"String(${k}).{'toUpperCase' if case == 'upper' else 'toLowerCase'}()") \
+                    if case in ("upper", "lower") else (lambda k: f"${k}")
                 inp["customFunctionJavascriptFunction"] = (
-                    "return JSON.stringify({" + ", ".join(f"{json.dumps(k)}: ${k}" for k in fields) + "});")
+                    "return JSON.stringify({" + ", ".join(f"{json.dumps(k)}: {wrap(k)}" for k in fields) + "});")
             else:
                 inp["customFunctionInputVariables"] = [{"variableName": "source", "variableValue": html(p.get("source", ""))},
                                                        {"variableName": "types", "variableValue": p.get("file_types", "")}]

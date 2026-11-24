@@ -43,7 +43,10 @@ def evaluate_one(case: dict, mode: str) -> dict:
     plan = r["plan"]
     types = [n["type"] for n in plan["nodes"]]
     row = {"id": case["id"], "pattern": case["pattern"], "request": case["request"], "attempts":
-           len([a for a in r["attempts"] if a["source"] != "fault-injection"]), "notes": []}
+           len([a for a in r["attempts"] if a["source"] != "fault-injection"]), "notes": [],
+           "planner": r["attempts"][0]["source"] if r["attempts"] else "?"}
+    if r.get("planner_note"):
+        row["notes"].append(r["planner_note"][:160])
     missing = [t for t in case["expect_nodes"] if t not in types]
     row["intent"] = types[:1] == [case["expect_trigger"]] and not missing
     if not row["intent"]:
@@ -57,6 +60,8 @@ def evaluate_one(case: dict, mode: str) -> dict:
         if not row["py_dryrun"]:
             row["notes"].append("dry-run: " + out.strip().splitlines()[-1] if out.strip() else "dry-run failed")
         row["simulate"] = bool(r["simulation"] and r["simulation"]["ok"])
+        if not row["simulate"]:
+            row["notes"].append("simulation: " + str((r["simulation"] or {}).get("error"))[:160])
         fw_unsupported = [w["node"] for w in r["flowise"]["warnings"] if w["code"] == "W_FLOWISE_UNSUPPORTED"]
         if fw_unsupported:
             row["notes"].append(f"Flowise skips {fw_unsupported} (no equivalent node)")
@@ -77,17 +82,30 @@ def evaluate_one(case: dict, mode: str) -> dict:
     return row
 
 
-def run_eval(mode: str = "template", out_dir: Path = Path("eval")) -> int:
-    cases = json.loads(REQUESTS.read_text())
+def run_eval(mode: str = "template", out_dir: Path = Path("eval"), requests: Path | None = None) -> int:
+    requests = requests or REQUESTS
+    cases = json.loads(requests.read_text())
+    # results-<mode>.* for the main set, results-<set>-<mode>.* for any other set
+    tag = mode if requests.resolve() == REQUESTS else f"{requests.stem.removeprefix('requests-')}-{mode}"
     t0 = time.time()
-    rows = [evaluate_one(c, mode) for c in cases]
+    rows = []
+    for c in cases:
+        try:
+            rows.append(evaluate_one(c, mode))
+        except Exception as exc:  # record the failure and keep going; a crash is a failed case, not a lost run
+            rows.append({"id": c["id"], "pattern": c["pattern"], "request": c["request"], "attempts": 0,
+                         "planner": "error", "notes": [f"crashed: {type(exc).__name__}: {str(exc)[:160]}"],
+                         **{k: False for k in COLUMNS}})
+        print(f"  {c['id']}: " + " ".join(k for k in COLUMNS if rows[-1][k]) + (f"  [{rows[-1]['planner']}]"), flush=True)
     totals = {c: sum(1 for r in rows if r[c]) for c in COLUMNS}
     n = len(rows)
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"results-{mode}.json").write_text(json.dumps({"mode": mode, "n": n, "totals": totals, "rows": rows}, indent=2))
+    (out_dir / f"results-{tag}.json").write_text(json.dumps({"mode": mode, "n": n, "totals": totals, "rows": rows}, indent=2))
 
-    md = [f"# FlowForge evaluation ({mode} planner)", "",
+    md = [f"# FlowForge evaluation ({mode} planner, `{requests.name}`)", "",
           f"{n} requests · run {time.strftime('%Y-%m-%d %H:%M')} · {time.time() - t0:.1f}s", "",
+          "First-attempt planner per request: " + ", ".join(
+              f"{k} ×{v}" for k, v in sorted(__import__("collections").Counter(r["planner"] for r in rows).items())), "",
           "| Metric | Passed | Rate |", "|---|---|---|"]
     md += [f"| {c} | {totals[c]}/{n} | {100 * totals[c] / n:.0f}% |" for c in COLUMNS]
     md += ["", "| ID | Pattern | " + " | ".join(COLUMNS) + " | Attempts | Notes |",
@@ -98,6 +116,6 @@ def run_eval(mode: str = "template", out_dir: Path = Path("eval")) -> int:
     md += ["", "Metric definitions are in `flowforge/evaluate.py`. `repair` = the same request with an injected "
            "fault (missing required param, dangling edge, literal Slack secret, unknown node type) was repaired "
            "within 3 attempts AND the repaired plan has the same steps and the same dry-run behaviour as the unfaulted one."]
-    (out_dir / f"results-{mode}.md").write_text("\n".join(md) + "\n")
+    (out_dir / f"results-{tag}.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
     return 0

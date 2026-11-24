@@ -24,8 +24,10 @@ def agent_model() -> str:
     return os.environ.get("FLOWFORGE_AGENT_MODEL", "qwen3:4b-instruct")
 
 
-def available(timeout: float = 1.5) -> tuple[bool, str]:
+def available(timeout: float | None = None) -> tuple[bool, str]:
     """(True, model) if Ollama answers and has the configured model pulled."""
+    if timeout is None:  # a busy 8 GB machine can take a few seconds to answer
+        timeout = float(os.environ.get("FLOWFORGE_OLLAMA_TIMEOUT", "5"))
     try:
         with urllib.request.urlopen(f"{host()}/api/tags", timeout=timeout) as r:
             tags = json.load(r)

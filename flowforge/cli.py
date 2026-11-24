@@ -58,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     e = sub.add_parser("eval")
     e.add_argument("--mode", default="template", choices=["auto", "llm", "template"])
     e.add_argument("--out", type=Path, default=Path("eval"))
+    e.add_argument("--requests", type=Path, default=None, help="request set (default eval/requests.json)")
     sv = sub.add_parser("serve")
     sv.add_argument("--port", type=int, default=8000)
     sv.add_argument("--host", default="127.0.0.1")
@@ -78,6 +79,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"    - {err}")
             for act in att.get("revision", []):
                 print(f"    fix: {act}")
+        if r.get("removed_steps"):
+            print("WARNING: the plan is valid, but self-correction removed requested steps: " + ", ".join(r["removed_steps"]))
         print("\nPLAN\n" + r["plan_summary"])
         print("\nVALIDATION\n" + r["report_text"])
         if r["ok"]:
@@ -108,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "eval":
         from .evaluate import run_eval
-        return run_eval(a.mode, a.out)
+        return run_eval(a.mode, a.out, a.requests)
     if a.cmd == "serve":
         import uvicorn
         from .api import create_app
