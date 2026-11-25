@@ -172,3 +172,10 @@ footer { color: var(--muted); font-size: .8rem; padding-block: 0 32px; }
 .msg { padding: 8px 12px; border-radius: 10px; max-width: 85%; white-space: pre-wrap; word-break: break-word; font-size: .88rem; }
 .msg.you { justify-self: end; background: var(--accent); color: var(--accent-ink); }
 .msg.bot { justify-self: start; background: var(--sunken); }
+
+/* one-click "Run it for real in Flowise" */
+#live-input-row { margin-top: 10px; }
+.live-input { flex: 1 1 100%; min-width: 0; font: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; background: var(--code-bg); color: inherit; }
+.live-out { display: grid; gap: 8px; margin-block: 0 16px; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.live-out h3 { margin: 0; font-size: 1rem; }
+.live-out .steps { margin: 0; }

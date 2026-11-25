@@ -17,6 +17,11 @@ if curl -sf "http://127.0.0.1:$PORT/api/v1/ping" > /dev/null; then echo "Flowise
 SHIM="$(mktemp -t flowise-shim).js"
 echo "const b = require('buffer'); if (!b.SlowBuffer) b.SlowBuffer = b.Buffer" > "$SHIM"
 
+# Flowise blocks every local address by default, which also blocks the local Ollama model.
+# Allow only this Mac (127.0.0.1 / localhost); keep blocking the home network, link-local and cloud metadata.
+export HTTP_SECURITY_CHECK="${HTTP_SECURITY_CHECK:-false}"
+export HTTP_DENY_LIST="${HTTP_DENY_LIST:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,169.254.0.0/16,100.64.0.0/10,0.0.0.0/8,fc00::/7,fe80::/10}"
+
 echo "Starting Flowise on http://localhost:$PORT (data in ~/.flowise)…"
 cd "$FLOWISE_DIR/packages/server"
 PORT="$PORT" NODE_OPTIONS="--require $SHIM" exec ./bin/run start

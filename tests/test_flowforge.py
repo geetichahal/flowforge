@@ -571,3 +571,16 @@ def test_simulated_email_trigger_matches_any_query():
     assert "receipt" in t["outputs"]["subject"].lower() and t["outputs"]["from"] == "shop@example.com"
     assert "generated to match query" in t["note"]
     assert all(s["status"] == "ok" for s in sim["trace"])
+
+
+def test_deploy_test_input_fills_form_and_webhook_samples():
+    from flowforge.deploy import _apply_test_input
+    form = {"kind": "form", "form": {"name": "Grace Hopper", "email": "g@example.com", "message": "Please call me back"}}
+    assert _apply_test_input(form, "Hello from my demo")["form"]["message"] == "Hello from my demo"
+    merged = _apply_test_input(form, '{"name": "Prof. Rao", "message": "Hi"}')["form"]
+    assert merged == {"name": "Prof. Rao", "email": "g@example.com", "message": "Hi"}
+    hook = {"kind": "webhook", "payload": {"amount": 250}}
+    assert _apply_test_input(hook, '{"amount": 40}')["payload"] == {"amount": 40}
+    chat = {"kind": "chat", "question": "Hello"}
+    assert _apply_test_input(chat, "What is 2+2?") == chat  # chat questions are passed separately
+    assert _apply_test_input(form, None) == form

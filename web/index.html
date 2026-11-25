@@ -50,11 +50,19 @@
         <input type="checkbox" id="fault">
         <label for="fault">Inject a fault to watch it self-correct</label>
       </div>
+      <div class="field" id="live-field" hidden>
+        <input type="checkbox" id="live">
+        <label for="live">Run it for real in Flowise</label>
+      </div>
       <button class="primary" id="go" type="submit" disabled>Generate</button>
+    </div>
+    <div class="controls" id="live-input-row" hidden>
+      <input id="live-input" class="live-input" placeholder="What to send when it runs (optional): a message, or a question for an assistant" aria-label="What to send when it runs">
     </div>
   </form>
 
   <div class="status" id="status" aria-live="polite"></div>
+  <div class="live-out" id="live-out" aria-live="polite" hidden></div>
 
   <div class="results" id="results">
     <div class="stack">

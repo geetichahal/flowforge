@@ -479,9 +479,16 @@ async function generate(modeOverride) {
     const sec = Math.round((Date.now() - started) / 1000);
     meta.textContent = usesLlm ? `${sec}s · a small model on free CPU takes 30–120s` : `${sec}s`;
   }, 1000);
+  $("live-out").hidden = true;
   try {
     await new Promise((r) => setTimeout(r, 20)); // let the status paint before Pyodide blocks the thread
-    render(await runPipeline(req, mode, $("fault").checked));
+    const r = await runPipeline(req, mode, $("fault").checked);
+    render(r);
+    // only when the person clicked Generate (the automatic first result on page load passes a mode string)
+    if (r.ok && typeof modeOverride !== "string" && engine.kind === "server" && $("live").checked) {
+      clearInterval(tick);
+      await runLive(r);
+    }
   } catch (e) {
     $("status").replaceChildren(el("span", { class: "pill err" }, "Error"), el("span", { class: "meta", text: e.message }));
   }
@@ -489,7 +496,34 @@ async function generate(modeOverride) {
   $("go").disabled = false; $("go").textContent = "Generate";
 }
 
+// One click: generate, then create the flow in Flowise, run it, and show the real result at the top.
+async function runLive(r) {
+  const box = $("live-out");
+  box.hidden = false;
+  box.replaceChildren(el("h3", { text: "Running it for real in Flowise…" }),
+    el("p", { class: "muted", text: "Creating the flow in your Flowise and running it. An assistant's first answer can take up to a minute." }));
+  $("go").textContent = "Running in Flowise…";
+  const url = store("flowforge-flowise-url") || "http://localhost:3000";
+  const sendText = $("live-input").value.trim();
+  try {
+    const res = await fetch(api("flowise/deploy"), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plan: r.plan, url, api_key: "", variables: {}, confirm: true, test_input: sendText || null }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(typeof d.detail === "string" ? d.detail : JSON.stringify(d.detail));
+    const ran = d.run && !d.run.skipped && d.run.ok;
+    box.replaceChildren(el("h3", { text: ran ? "✓ It ran for real in Flowise" : "It was created in Flowise, but did not run" }),
+      ...deployResult(d, url, ""));
+  } catch (e) {
+    box.replaceChildren(el("h3", { text: "Could not run it in Flowise" }), el("p", { class: "error-text", text: e.message }),
+      el("p", { class: "muted", text: "Is Flowise running? Start it with tools/flowise_start.sh" }));
+  }
+}
+
 function init() {
+  const syncLive = () => { $("live-input-row").hidden = !$("live").checked; try { localStorage.setItem("flowforge-live", $("live").checked ? "1" : ""); } catch (_) {} };
+  $("live").addEventListener("change", syncLive);
   $("examples").replaceChildren(...EXAMPLES.map((x) => {
     const b = el("button", { class: "chip", type: "button", text: x });
     b.addEventListener("click", () => { $("request").value = x; generate(); });
@@ -518,6 +552,11 @@ function init() {
       const llm = eng.health.llm;
       const where = eng.remote ? "Online server" : "Server";
       setEngine(llm.available ? "ok" : "warn", llm.available ? `${where} · LLM planner: ${llm.detail}` : `${where} · rule-based planner (Ollama not running)`);
+      if (!eng.health.public) {
+        $("live-field").hidden = false;
+        try { $("live").checked = localStorage.getItem("flowforge-live") === "1"; } catch (_) {}
+        $("live-input-row").hidden = !$("live").checked;
+      }
     } else {
       setEngine(eng.serverDown ? "warn" : "ok", eng.serverDown
         ? "Server asleep or unreachable · running in your browser (reload in a minute to use it)"
