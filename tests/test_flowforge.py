@@ -584,3 +584,6 @@ def test_deploy_test_input_fills_form_and_webhook_samples():
     chat = {"kind": "chat", "question": "Hello"}
     assert _apply_test_input(chat, "What is 2+2?") == chat  # chat questions are passed separately
     assert _apply_test_input(form, None) == form
+    thanks = {"kind": "form", "form": {"name": "Grace Hopper", "email": "grace@example.com"}}
+    assert _apply_test_input(thanks, " me@gmail.com ")["form"] == {"name": "Grace Hopper", "email": "me@gmail.com"}
+    assert _apply_test_input(thanks, "just some text")["form"]["email"] == "just some text"  # no message field: last field

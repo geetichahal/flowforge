@@ -183,7 +183,8 @@ def deploy(plan: dict, export: dict, base: str | None = None, api_key: str | Non
 
 def _apply_test_input(sample: dict, test_input: str | None) -> dict:
     """Put the user's own test text into a form/webhook sample: a JSON object is merged field by field,
-    plain text goes into the 'message' field (or the last field if there is none)."""
+    an email address goes into the 'email' field, other text into the 'message' field (or the last
+    field if there is none)."""
     if not test_input or sample["kind"] not in ("form", "webhook"):
         return sample
     key = "form" if sample["kind"] == "form" else "payload"
@@ -194,6 +195,8 @@ def _apply_test_input(sample: dict, test_input: str | None) -> dict:
         given = None
     if isinstance(given, dict):
         data.update(given)
+    elif "email" in data and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", test_input.strip()):
+        data["email"] = test_input.strip()
     else:
         field = "message" if "message" in data or not data else list(data)[-1]
         data[field] = test_input
