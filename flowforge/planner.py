@@ -258,6 +258,32 @@ def _split_condition(text: str) -> tuple[str, re.Match | None, str, str]:
     return before, m, then_part, else_part
 
 
+_NEXT_ACTION = r"(?=\s*$|[.;]\s*$|,?\s+and\s+(?:then\s+)?(?:post|add|save|send|notify|ping|create|text|append|upload|log)\b)"
+_BODY_LEAD = r"\b(?:saying|that says|which says|with (?:the |a )?(?:message|text|note)|body)"
+
+
+def custom_email_text(request: str) -> tuple[str | None, str | None]:
+    """The user's own e-mail wording, if the request gives it.
+
+    "send them an email saying Welcome to our demo", "... with the message 'See you soon'",
+    "... with subject Hello and body Thanks for watching", or a quoted sentence after "email".
+    Returns (subject, body); either may be None.
+    """
+    subject = body = None
+    # only an explicit outgoing subject: "with subject X" / "with the subject line 'X'" / "subject: X"
+    lead = r"(?:\bwith (?:the |a )?subject(?: line)?\s*[:\-–]?|\bsubject(?: line)?\s*[:\-–])\s*"
+    m = (re.search(lead + r"[\"“]([^\"”]+)[\"”]", request, re.I)
+         or re.search(lead + r"(.+?)(?=\s+(?:and|with|saying)\b|[,;]|\.?\s*$)", request, re.I))
+    if m:
+        subject = m.group(1).strip()
+    m = (re.search(_BODY_LEAD + r"\s*[:\-–]?\s*[\"“]([^\"”]+)[\"”]", request, re.I)
+         or re.search(_BODY_LEAD + r"\s*[:\-–]?\s*(.+?)" + _NEXT_ACTION, request, re.I)
+         or re.search(r"\be-?mail\b[^\"“]*[\"“]([^\"”]{3,})[\"”]", request, re.I))
+    if m:
+        body = m.group(1).strip()
+    return subject or None, body or None
+
+
 class _Builder:
     def __init__(self, request: str):
         self.request = request
@@ -422,11 +448,16 @@ class _Builder:
                 subject = "Scheduled report {{trigger.timestamp}}"
             else:
                 subject = "FlowForge notification"
-            if re.search(r"thank", seg, re.I):
-                name = "{{trigger.name}}" if tt == "form_submitted" else "{{trigger.body.name}}" if tt == "webhook" else "there"
+            name = "{{trigger.name}}" if tt == "form_submitted" else "{{trigger.body.name}}" if tt == "webhook" else "there"
+            own_subject, own_body = custom_email_text(self.request)
+            if own_body:
+                body = own_body if re.match(r"(hi|hello|dear|hey)\b", own_body, re.I) else f"Hi {name},\n\n{own_body}"
+            elif re.search(r"thank", seg, re.I):
                 body = f"Hi {name},\n\nThanks for getting in touch. We received your message and will reply soon."
             else:
                 body = self.message_text()
+            if own_subject:
+                subject = own_subject
             return self.add("send_email", {"to": to, "subject": subject, "body": body}, base="send_email")
         if typ == "llm_summarize":
             text = self.last_content or ("{{trigger.body}}" if tt in ("email_received", "webhook")
@@ -537,11 +568,16 @@ class _Builder:
 
 def template_plan(request: str) -> dict:
     b = _Builder(request)
-    ttype, tparams = detect_trigger(request)
+    # the user's own e-mail wording must not be read as extra steps ("saying we saved it to drive")
+    clean = request
+    for own in custom_email_text(request):
+        if own:
+            clean = clean.replace(own, " ")
+    ttype, tparams = detect_trigger(clean)
     b.trigger_type = ttype
     b.add(ttype, tparams, base="trigger")
 
-    text = request
+    text = clean
     # drop the trigger clause so "when I get an email" does not read as "send an email"
     trig_clause = re.match(r"\s*(?:when(?:ever)?|each time|every time|once|if)\b[^,]*?(?:,|\bthen\b)", text, re.I)
     if ttype != "manual" and trig_clause and not COND_RE.match(text[trig_clause.start():].strip()):

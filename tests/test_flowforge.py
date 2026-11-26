@@ -587,3 +587,28 @@ def test_deploy_test_input_fills_form_and_webhook_samples():
     thanks = {"kind": "form", "form": {"name": "Grace Hopper", "email": "grace@example.com"}}
     assert _apply_test_input(thanks, " me@gmail.com ")["form"] == {"name": "Grace Hopper", "email": "me@gmail.com"}
     assert _apply_test_input(thanks, "just some text")["form"]["email"] == "just some text"  # no message field: last field
+
+
+def test_custom_email_wording_from_the_request():
+    from flowforge.planner import template_plan
+    def email(req):
+        p = template_plan(req)
+        return [n for n in p["nodes"] if n["type"] == "send_email"][0]["params"], [n["type"] for n in p["nodes"]]
+    params, types = email("when someone submits the contact form, send them an email saying Welcome to the demo!")
+    assert params["body"] == "Hi {{trigger.name}},\n\nWelcome to the demo!" and types == ["form_submitted", "send_email"]
+    params, _ = email("when someone submits the contact form, send them an email with subject Hello and body See you soon")
+    assert params["subject"] == "Hello" and params["body"].endswith("See you soon")
+    params, _ = email('when someone submits the contact form, send them an email "Thanks for visiting"')
+    assert params["body"].endswith("Thanks for visiting")
+    # words inside the message are not read as extra steps
+    _, types = email("when someone submits the contact form, send them an email saying We saved your file to Drive")
+    assert types == ["form_submitted", "send_email"]
+    # the default thank-you text is unchanged
+    params, _ = email("when someone submits the contact form, send them a thank-you email")
+    assert "Thanks for getting in touch" in params["body"] and params["subject"] == "Thank you"
+
+
+def test_incoming_subject_is_not_read_as_email_wording():
+    from flowforge.planner import custom_email_text
+    assert custom_email_text("when a new email arrives, if the subject contains urgent send me a text message") == (None, None)
+    assert custom_email_text("For each new email with the word invoice in the subject, record it in a spreadsheet") == (None, None)
