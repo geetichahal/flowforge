@@ -125,7 +125,7 @@ the same dry-run behaviour as the clean plan. That is the `repair` metric. Demo:
 It returns `ok: false` with the remaining errors and no outputs. It never shows a broken workflow as if it
 worked (`test_loop_reports_failure_honestly`).
 
-**Q: Why a local model and not GPT/Claude?**
+**Q: Why a local model and not a cloud model like GPT?**
 No cost, no API key, no internet dependency, and the user's request stays on their machine. The cost is
 speed: about 40–90 s per request on an 8 GB Mac.
 
