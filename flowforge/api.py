@@ -56,6 +56,12 @@ class FlowisePushTo(FlowisePush):
     api_key: str = ""
 
 
+class N8nDeploy(BaseModel):
+    plan: dict[str, Any]
+    test_input: str | None = None
+    confirm: bool = Field(False, description="Must be true: this creates a workflow in your n8n, publishes it and runs it once")
+
+
 class FlowiseDeploy(BaseModel):
     plan: dict[str, Any]
     url: str = ""
@@ -206,6 +212,21 @@ def create_app(with_ui: bool = False) -> FastAPI:
         try:
             return deploy_mod.deploy(plan, flowise.generate(plan)["export"], base=base, api_key=key,
                                      variables=body.variables, test_input=body.test_input)
+        except Exception as exc:
+            raise HTTPException(502, str(exc)[:500])
+
+    @app.post("/n8n/deploy")
+    def n8n_deploy(body: N8nDeploy, request: Request):
+        """Create the workflow in the local n8n, attach saved credentials, publish it and run it once."""
+        if is_public_request(request):
+            raise HTTPException(403, "Deploying to n8n is only available from this machine")
+        if not body.confirm:
+            raise HTTPException(400, "Set confirm=true to create and run this workflow in your n8n")
+        plan = _valid_plan(PlanBody(plan=body.plan))
+        from . import n8n_deploy as n8n_mod
+        from .generators import n8n as n8n_gen
+        try:
+            return n8n_mod.deploy(plan, n8n_gen.generate(plan)["workflow"], test_input=body.test_input)
         except Exception as exc:
             raise HTTPException(502, str(exc)[:500])
 

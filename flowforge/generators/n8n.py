@@ -206,7 +206,15 @@ class N8nBuilder:
             return node("n8n-nodes-base.set", 3.4, self._set_params({"message": raw.get("message", "")}))
         if t == "sheets_append":
             cols = [v.strip() for v in str(raw.get("values", "")).split(",")]
-            mapping = {f"col_{i + 1}": c for i, c in enumerate(cols)}
+            # n8n appends by header name, so name each column after the field it holds
+            # ({{trigger.name}} -> "Name"); the sheet's first row must use these headings.
+            mapping = {}
+            for i, c in enumerate(cols):
+                ref = re.fullmatch(r"\{\{\s*[\w.]+\.(\w+)\s*\}\}", c)
+                header = ref.group(1).replace("_", " ").title() if ref else f"Column {i + 1}"
+                while header in mapping:
+                    header += " 2"
+                mapping[header] = c
             sheet = str(raw.get("range", "Sheet1!A1")).split("!")[0] or "Sheet1"
             return node("n8n-nodes-base.googleSheets", 4.5,
                         {"operation": "append",

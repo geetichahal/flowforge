@@ -52,7 +52,11 @@
       </div>
       <div class="field" id="live-field" hidden>
         <input type="checkbox" id="live">
-        <label for="live">Run it for real in Flowise</label>
+        <label for="live">Run it for real in</label>
+        <select id="live-target" aria-label="Where to run it">
+          <option value="flowise">Flowise</option>
+          <option value="n8n">n8n</option>
+        </select>
       </div>
       <button class="primary" id="go" type="submit" disabled>Generate</button>
     </div>

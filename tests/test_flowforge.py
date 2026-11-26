@@ -638,3 +638,69 @@ def test_chat_messages_use_the_users_own_words():
     # a quoted condition value is not taken as message text
     p = template_plan('when a webhook receives an order, if the status is "paid" send me a text message')
     assert [n for n in p["nodes"] if n["type"] == "condition"][0]["params"]["value"] == "paid"
+
+
+def test_n8n_deploy_against_a_fake_n8n():
+    """Credentials matched by type, workflow created and published, form submitted, execution read back."""
+    import json as _json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from flowforge import n8n_deploy
+    from flowforge.generators import n8n as n8n_gen
+    from flowforge.planner import template_plan
+
+    seen = {"created": None, "published": False, "form": None}
+
+    class Fake(BaseHTTPRequestHandler):
+        def _send(self, obj, code=200):
+            data = _json.dumps(obj).encode()
+            self.send_response(code); self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+
+        def do_GET(self):
+            assert self.path.startswith("/form/") or self.headers.get("X-N8N-API-KEY") == "test-key"
+            if self.path.startswith("/api/v1/credentials"):
+                return self._send({"data": [{"id": "g1", "name": "My Gmail", "type": "gmailOAuth2"},
+                                            {"id": "s1", "name": "My Sheets", "type": "googleSheetsOAuth2Api"}]})
+            if self.path.startswith("/form/"):
+                return self._send({"form": "page"})
+            if self.path.startswith("/api/v1/executions"):
+                done = seen["form"] is not None
+                runs = {"Form Submitted": [{"executionStatus": "success"}], "Send Email": [{"executionStatus": "success"}],
+                        "Append to Google Sheet": [{"executionStatus": "success", "data": {"main": [[{"json": {"ok": True}}]]}}]}
+                return self._send({"data": [{"id": "1", "status": "success" if done else "running", "finished": done,
+                                             "data": {"resultData": {"runData": runs, "lastNodeExecuted": "Append to Google Sheet"}}}]})
+            self._send({}, 404)
+
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
+            if self.path == "/api/v1/workflows":
+                seen["created"] = _json.loads(body)
+                return self._send({"id": "wf1"})
+            if self.path == "/api/v1/workflows/wf1/publish":
+                seen["published"] = True
+                return self._send({"id": "wf1"})
+            if self.path.startswith("/form/"):
+                seen["form"] = body
+                return self._send({"status": 200})
+            self._send({}, 404)
+
+        def log_message(self, *a):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Fake)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_port}"
+    try:
+        plan = template_plan("when someone submits the contact form, send them a thank-you email and add a row to the spreadsheet")
+        out = n8n_deploy.deploy(plan, n8n_gen.generate(plan)["workflow"], test_input="Dr. Rao, rao@example.org",
+                                base=base, api_key="test-key")
+    finally:
+        srv.shutdown()
+    creds = {n["type"]: n.get("credentials") for n in seen["created"]["nodes"]}
+    assert creds["n8n-nodes-base.gmail"] == {"gmailOAuth2": {"id": "g1", "name": "My Gmail"}}
+    assert creds["n8n-nodes-base.googleSheets"] == {"googleSheetsOAuth2Api": {"id": "s1", "name": "My Sheets"}}
+    assert set(seen["created"]) == {"name", "nodes", "connections", "settings"}  # n8n rejects extra fields
+    assert seen["published"] and "Dr. Rao" in seen["form"] and "rao@example.org" in seen["form"]
+    assert out["platform"] == "n8n" and out["form_url"].startswith(base + "/form/")
+    assert out["run"]["ok"] and [n["status"] for n in out["run"]["nodes"]] == ["FINISHED"] * 3

@@ -332,7 +332,13 @@ function deployResult(d, flowiseUrl, apiKey) {
   } else if (run && run.skipped) {
     kids.push(el("p", { class: "muted", text: run.detail }));
   }
-  kids.push(el("p", {}, el("a", { href: d.url, target: "_blank", rel: "noopener" }, "Open it on the Flowise canvas")));
+  if (d.platform === "n8n") {
+    kids.push(el("p", {}, el("a", { href: d.url, target: "_blank", rel: "noopener" }, "Open it in the n8n editor"),
+      d.form_url ? " · " : null,
+      d.form_url ? el("a", { href: d.form_url, target: "_blank", rel: "noopener" }, "Open its live form") : null));
+  } else {
+    kids.push(el("p", {}, el("a", { href: d.url, target: "_blank", rel: "noopener" }, "Open it on the Flowise canvas")));
+  }
   if (d.chat && run && run.ok) kids.push(chatBox(d.id, run.chat_id, flowiseUrl, apiKey));
   return kids;
 }
@@ -496,34 +502,44 @@ async function generate(modeOverride) {
   $("go").disabled = false; $("go").textContent = "Generate";
 }
 
-// One click: generate, then create the flow in Flowise, run it, and show the real result at the top.
+// One click: generate, then create it in Flowise or n8n, run it, and show the real result at the top.
 async function runLive(r) {
   const box = $("live-out");
+  const target = $("live-target").value === "n8n" ? "n8n" : "flowise";
+  const where = target === "n8n" ? "n8n" : "Flowise";
   box.hidden = false;
-  box.replaceChildren(el("h3", { text: "Running it for real in Flowise…" }),
-    el("p", { class: "muted", text: "Creating the flow in your Flowise and running it. An assistant's first answer can take up to a minute." }));
-  $("go").textContent = "Running in Flowise…";
+  box.replaceChildren(el("h3", { text: `Running it for real in ${where}…` }),
+    el("p", { class: "muted", text: target === "n8n"
+      ? "Creating the workflow in your n8n, publishing it and submitting it once."
+      : "Creating the flow in your Flowise and running it. An assistant's first answer can take up to a minute." }));
+  $("go").textContent = `Running in ${where}…`;
   const url = store("flowforge-flowise-url") || "http://localhost:3000";
   const sendText = $("live-input").value.trim();
   try {
-    const res = await fetch(api("flowise/deploy"), {
+    const res = await fetch(api(target === "n8n" ? "n8n/deploy" : "flowise/deploy"), {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ plan: r.plan, url, api_key: "", variables: {}, confirm: true, test_input: sendText || null }),
+      body: JSON.stringify(target === "n8n"
+        ? { plan: r.plan, confirm: true, test_input: sendText || null }
+        : { plan: r.plan, url, api_key: "", variables: {}, confirm: true, test_input: sendText || null }),
     });
     const d = await res.json();
     if (!res.ok) throw new Error(typeof d.detail === "string" ? d.detail : JSON.stringify(d.detail));
     const ran = d.run && !d.run.skipped && d.run.ok;
-    box.replaceChildren(el("h3", { text: ran ? "✓ It ran for real in Flowise" : "It was created in Flowise, but did not run" }),
+    box.replaceChildren(el("h3", { text: ran ? `✓ It ran for real in ${where}` : `It was created in ${where}, but did not run` }),
       ...deployResult(d, url, ""));
   } catch (e) {
-    box.replaceChildren(el("h3", { text: "Could not run it in Flowise" }), el("p", { class: "error-text", text: e.message }),
-      el("p", { class: "muted", text: "Is Flowise running? Start it with tools/flowise_start.sh" }));
+    box.replaceChildren(el("h3", { text: `Could not run it in ${where}` }), el("p", { class: "error-text", text: e.message }),
+      el("p", { class: "muted", text: target === "n8n"
+        ? "Is n8n running, with an API key saved? Start it with ~/n8n-local/start.sh"
+        : "Is Flowise running? Start it with tools/flowise_start.sh" }));
   }
 }
 
 function init() {
   const syncLive = () => { $("live-input-row").hidden = !$("live").checked; try { localStorage.setItem("flowforge-live", $("live").checked ? "1" : ""); } catch (_) {} };
   $("live").addEventListener("change", syncLive);
+  try { const t = localStorage.getItem("flowforge-live-target"); if (t) $("live-target").value = t; } catch (_) {}
+  $("live-target").addEventListener("change", () => { try { localStorage.setItem("flowforge-live-target", $("live-target").value); } catch (_) {} });
   $("examples").replaceChildren(...EXAMPLES.map((x) => {
     const b = el("button", { class: "chip", type: "button", text: x });
     b.addEventListener("click", () => { $("request").value = x; generate(); });
