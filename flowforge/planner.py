@@ -278,7 +278,7 @@ def custom_email_text(request: str) -> tuple[str | None, str | None]:
         subject = m.group(1).strip()
     m = (re.search(_BODY_LEAD + r"\s*[:\-–]?\s*[\"“]([^\"”]+)[\"”]", request, re.I)
          or re.search(_BODY_LEAD + r"\s*[:\-–]?\s*(.+?)" + _NEXT_ACTION, request, re.I)
-         or re.search(r"\be-?mail\b[^\"“]*[\"“]([^\"”]{3,})[\"”]", request, re.I))
+         or re.search(r"\b(?:e-?mail|message|discord|slack|teams|text|sms)\b[^\"“]{0,25}[\"“]([^\"”]{3,})[\"”]", request, re.I))
     if m:
         body = m.group(1).strip()
     return subject or None, body or None
@@ -363,6 +363,19 @@ class _Builder:
             base += f" (saved: {self.saved_link})"
         return base
 
+    def chat_text(self, seg: str) -> str:
+        """Text for a Slack/Discord/Teams/SMS message: the user's own wording if given,
+        else the form's message as typed, else the default summary of the event."""
+        own = custom_email_text(self.request)[1]
+        if own:
+            return own
+        if self.trigger_type == "form_submitted" and not self.last_content:
+            if re.search(r"\bname,? and (?:their |the )?message\b", seg, re.I):
+                return "{{trigger.name}}: {{trigger.message}}"
+            if re.search(r"\b(?:their|the|his|her) message\b", seg, re.I):
+                return "{{trigger.message}}"
+        return self.message_text()
+
     def recipient(self, seg: str) -> str:
         m = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", seg) or re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", self.request)
         if m:
@@ -426,18 +439,18 @@ class _Builder:
             return i
         if typ == "slack_message":
             ch = re.search(r"#[\w-]+", seg) or re.search(r"#[\w-]+", self.request)
-            return self.add("slack_message", {"webhook_url": "{{env.SLACK_WEBHOOK_URL}}", "text": self.message_text(),
+            return self.add("slack_message", {"webhook_url": "{{env.SLACK_WEBHOOK_URL}}", "text": self.chat_text(seg),
                                               "channel": ch.group(0) if ch else ""}, base="notify_slack")
         if typ == "discord_message":
-            return self.add("discord_message", {"webhook_url": "{{env.DISCORD_WEBHOOK_URL}}", "content": self.message_text()},
+            return self.add("discord_message", {"webhook_url": "{{env.DISCORD_WEBHOOK_URL}}", "content": self.chat_text(seg)},
                             base="notify_discord")
         if typ == "teams_message":
-            return self.add("teams_message", {"webhook_url": "{{env.TEAMS_WEBHOOK_URL}}", "text": self.message_text()},
+            return self.add("teams_message", {"webhook_url": "{{env.TEAMS_WEBHOOK_URL}}", "text": self.chat_text(seg)},
                             base="notify_teams")
         if typ == "sms_message":
             m = re.search(r"\+\d[\d -]{7,}\d", self.request)
             return self.add("sms_message", {"to": m.group(0).replace(" ", "").replace("-", "") if m else "{{env.MY_PHONE}}",
-                                            "body": self.message_text()[:300]}, base="send_sms")
+                                            "body": self.chat_text(seg)[:300]}, base="send_sms")
         if typ == "send_email":
             to = self.recipient(seg)
             if tt == "email_received" and to == "{{trigger.from}}":

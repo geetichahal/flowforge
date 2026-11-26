@@ -612,3 +612,17 @@ def test_incoming_subject_is_not_read_as_email_wording():
     from flowforge.planner import custom_email_text
     assert custom_email_text("when a new email arrives, if the subject contains urgent send me a text message") == (None, None)
     assert custom_email_text("For each new email with the word invoice in the subject, record it in a spreadsheet") == (None, None)
+
+
+def test_chat_messages_use_the_users_own_words():
+    from flowforge.planner import template_plan
+    def content(req):
+        p = template_plan(req)
+        return [n for n in p["nodes"] if n["type"] == "discord_message"][0]["params"]["content"]
+    assert content("when someone submits the contact form, post their message to discord") == "{{trigger.message}}"
+    assert content("when someone submits the contact form, post their name and message to discord") == "{{trigger.name}}: {{trigger.message}}"
+    assert content("when someone submits the contact form, post to discord saying Hello from the viva!") == "Hello from the viva!"
+    assert content('when someone submits the contact form, send a discord message "Demo successful"') == "Demo successful"
+    # a quoted condition value is not taken as message text
+    p = template_plan('when a webhook receives an order, if the status is "paid" send me a text message')
+    assert [n for n in p["nodes"] if n["type"] == "condition"][0]["params"]["value"] == "paid"
