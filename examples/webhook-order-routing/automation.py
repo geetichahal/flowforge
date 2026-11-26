@@ -163,8 +163,8 @@ CRON = ''
 def step_trigger(ctx):
     """Webhook: Start when an HTTP request is sent to the automation's webhook URL."""
     PARAMS = {'path': 'flowforge-hook', 'method': 'POST'}
-    SAMPLE = {   'body': {   'name': 'Ada Lovelace',
-                    'email': 'ada@example.com',
+    SAMPLE = {   'body': {   'name': 'Test Customer',
+                    'email': 'customer@example.com',
                     'amount': 250,
                     'message': 'Interested in the premium plan',
                     'event': 'signup'},

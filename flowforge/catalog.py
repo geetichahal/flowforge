@@ -87,7 +87,7 @@ NODES: list[NodeType] = [
         ),
         outputs={"body": "Parsed JSON body", "headers": "Request headers", "query": "Query parameters"},
         sample_output={
-            "body": {"name": "Ada Lovelace", "email": "ada@example.com", "amount": 250,
+            "body": {"name": "Test Customer", "email": "customer@example.com", "amount": 250,
                      "message": "Interested in the premium plan", "event": "signup"},
             "headers": {"content-type": "application/json"},
             "query": {},
@@ -130,7 +130,7 @@ NODES: list[NodeType] = [
             Param("fields", True, "name,email,message", "Comma-separated field names"),
         ),
         outputs={"submitted_at": "Submission time"},  # plus one output per declared field
-        sample_output={"name": "Grace Hopper", "email": "grace@example.com",
+        sample_output={"name": "Test User", "email": "test.user@example.com",
                        "message": "Please call me back", "submitted_at": "2026-11-24T10:15:00Z"},
         keywords=("form", "submits", "submission", "sign up form", "survey"),
     ),

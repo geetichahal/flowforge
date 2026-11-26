@@ -161,7 +161,7 @@ def test_python_live_run_hits_real_http_and_respects_approval(tmp_path):
     plan = normalize(planner.template_plan(f"when a webhook receives a signup, send it to {url}"))
     f = tmp_path / "a.py"
     f.write_text(python_gen.generate(plan)["code"])
-    (tmp_path / "payload.json").write_text(json.dumps({"body": {"email": "ada@example.com"}, "headers": {}, "query": {}}))
+    (tmp_path / "payload.json").write_text(json.dumps({"body": {"email": "customer@example.com"}, "headers": {}, "query": {}}))
     base = {k: v for k, v in os.environ.items() if not k.startswith("FLOWFORGE_")}
     # live, but approval denied -> nothing sent
     r = subprocess.run([sys.executable, "-I", str(f), "--payload", "payload.json"], input="n\n", capture_output=True,
@@ -173,7 +173,7 @@ def test_python_live_run_hits_real_http_and_respects_approval(tmp_path):
                        cwd=tmp_path, env={**base, "FLOWFORGE_DRY_RUN": "0", "FLOWFORGE_AUTO_APPROVE": "1"}, timeout=60)
     srv.shutdown()
     assert r.returncode == 0, r.stderr
-    assert received == [{"email": "ada@example.com"}]
+    assert received == [{"email": "customer@example.com"}]
 
 
 def test_python_step_failure_is_reported_and_stops_the_run(tmp_path):
@@ -194,7 +194,7 @@ def test_python_step_failure_is_reported_and_stops_the_run(tmp_path):
     assert code.count("# Step ") == len(plan["nodes"]) and "# Runs after 'trigger'" in code
     f = tmp_path / "a.py"
     f.write_text(code)
-    (tmp_path / "payload.json").write_text(json.dumps({"body": {"email": "ada@example.com"}, "headers": {}, "query": {}}))
+    (tmp_path / "payload.json").write_text(json.dumps({"body": {"email": "customer@example.com"}, "headers": {}, "query": {}}))
     base = {k: v for k, v in os.environ.items() if not k.startswith("FLOWFORGE_")}
     r = subprocess.run([sys.executable, "-I", str(f), "--payload", "payload.json"], capture_output=True, text=True,
                        cwd=tmp_path, env={**base, "FLOWFORGE_DRY_RUN": "0", "FLOWFORGE_AUTO_APPROVE": "1"}, timeout=60)
@@ -462,7 +462,7 @@ def test_transform_case_in_all_outputs(tmp_path):
     env = {k: v for k, v in os.environ.items() if not k.startswith("FLOWFORGE_")}
     out = subprocess.run([sys.executable, "-I", str(f)], capture_output=True, text=True, env=env, timeout=60)
     assert out.returncode == 0, out.stderr
-    assert '"GRACE HOPPER"' in out.stdout  # sample form name, uppercased by the transform step
+    assert '"TEST USER"' in out.stdout  # sample form name, uppercased by the transform step
 
 
 @pytest.mark.parametrize("text,types,method", [
@@ -575,17 +575,17 @@ def test_simulated_email_trigger_matches_any_query():
 
 def test_deploy_test_input_fills_form_and_webhook_samples():
     from flowforge.deploy import _apply_test_input
-    form = {"kind": "form", "form": {"name": "Grace Hopper", "email": "g@example.com", "message": "Please call me back"}}
+    form = {"kind": "form", "form": {"name": "Test User", "email": "test.user@example.com", "message": "Please call me back"}}
     assert _apply_test_input(form, "Hello from my demo")["form"]["message"] == "Hello from my demo"
     assert _apply_test_input(form, "Hello from my demo")["form"]["name"] == "Guest"
     merged = _apply_test_input(form, '{"name": "Prof. Rao", "message": "Hi"}')["form"]
-    assert merged == {"name": "Prof. Rao", "email": "g@example.com", "message": "Hi"}
+    assert merged == {"name": "Prof. Rao", "email": "test.user@example.com", "message": "Hi"}
     hook = {"kind": "webhook", "payload": {"amount": 250}}
     assert _apply_test_input(hook, '{"amount": 40}')["payload"] == {"amount": 40}
     chat = {"kind": "chat", "question": "Hello"}
     assert _apply_test_input(chat, "What is 2+2?") == chat  # chat questions are passed separately
     assert _apply_test_input(form, None) == form
-    thanks = {"kind": "form", "form": {"name": "Grace Hopper", "email": "grace@example.com"}}
+    thanks = {"kind": "form", "form": {"name": "Test User", "email": "test.user@example.com"}}
     assert _apply_test_input(thanks, " me@gmail.com ")["form"] == {"name": "Me", "email": "me@gmail.com"}
     # an e-mail address alone never leaves the sample name next to it
     from flowforge.deploy import name_from_email
