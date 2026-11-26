@@ -181,6 +181,12 @@ def deploy(plan: dict, export: dict, base: str | None = None, api_key: str | Non
     return result
 
 
+def name_from_email(email: str) -> str:
+    """'rajesh.shrivastava@bennett.edu.in' -> 'Rajesh Shrivastava'; falls back to 'there' ("Hi there")."""
+    words = [w for w in re.split(r"[._+\-\d]+", email.split("@")[0]) if w]
+    return " ".join(w.capitalize() for w in words) or "there"
+
+
 def _apply_test_input(sample: dict, test_input: str | None) -> dict:
     """Put the user's own test text into a form/webhook sample: a JSON object is merged field by field,
     an email address goes into the 'email' field, other text into the 'message' field (or the last
@@ -195,11 +201,18 @@ def _apply_test_input(sample: dict, test_input: str | None) -> dict:
         given = None
     if isinstance(given, dict):
         data.update(given)
-    elif "email" in data and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", test_input.strip()):
-        data["email"] = test_input.strip()
+    elif "email" in data and (addr := re.search(r"[^@\s,;<>()\"']+@[^@\s,;<>()\"']+\.[A-Za-z]{2,}", test_input)):
+        # "rao@x.in", "Dr. Rao, rao@x.in", "Dr. Rao <rao@x.in>", "rao@x.in - Dr. Rao"
+        data["email"] = addr.group(0)
+        rest = (test_input[:addr.start()] + " " + test_input[addr.end():]).strip(" \t,;:|<>()-–\"'")
+        rest = re.sub(r"\s*[,;|]\s*", " ", rest).strip()
+        if "name" in data:  # never keep the sample person's name next to a real address
+            data["name"] = rest or name_from_email(data["email"])
     else:
         field = "message" if "message" in data or not data else list(data)[-1]
         data[field] = test_input
+        if field != "name" and data.get("name") == sample[key].get("name"):
+            data["name"] = "Guest"  # the user typed something but no name: don't show the sample person
     return {**sample, key: data}
 
 

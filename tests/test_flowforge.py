@@ -577,6 +577,7 @@ def test_deploy_test_input_fills_form_and_webhook_samples():
     from flowforge.deploy import _apply_test_input
     form = {"kind": "form", "form": {"name": "Grace Hopper", "email": "g@example.com", "message": "Please call me back"}}
     assert _apply_test_input(form, "Hello from my demo")["form"]["message"] == "Hello from my demo"
+    assert _apply_test_input(form, "Hello from my demo")["form"]["name"] == "Guest"
     merged = _apply_test_input(form, '{"name": "Prof. Rao", "message": "Hi"}')["form"]
     assert merged == {"name": "Prof. Rao", "email": "g@example.com", "message": "Hi"}
     hook = {"kind": "webhook", "payload": {"amount": 250}}
@@ -585,7 +586,18 @@ def test_deploy_test_input_fills_form_and_webhook_samples():
     assert _apply_test_input(chat, "What is 2+2?") == chat  # chat questions are passed separately
     assert _apply_test_input(form, None) == form
     thanks = {"kind": "form", "form": {"name": "Grace Hopper", "email": "grace@example.com"}}
-    assert _apply_test_input(thanks, " me@gmail.com ")["form"] == {"name": "Grace Hopper", "email": "me@gmail.com"}
+    assert _apply_test_input(thanks, " me@gmail.com ")["form"] == {"name": "Me", "email": "me@gmail.com"}
+    # an e-mail address alone never leaves the sample name next to it
+    from flowforge.deploy import name_from_email
+    assert _apply_test_input(thanks, "rajesh.shrivastava@bennett.edu.in")["form"]["name"] == "Rajesh Shrivastava"
+    assert name_from_email("geeti_chahal91@gmail.com") == "Geeti Chahal"
+    assert name_from_email("12345@example.com") == "there"
+    # name and e-mail typed together as plain text
+    for typed in ("Deepanshu Yadav , Deepanshu90@gmail.com", "Deepanshu Yadav <Deepanshu90@gmail.com>",
+                  "Deepanshu90@gmail.com - Deepanshu Yadav", "Deepanshu Yadav; Deepanshu90@gmail.com"):
+        assert _apply_test_input(thanks, typed)["form"] == {"name": "Deepanshu Yadav", "email": "Deepanshu90@gmail.com"}, typed
+    # a JSON input with an explicit name keeps that name
+    assert _apply_test_input(thanks, '{"name": "Dr. Rao", "email": "rao@x.in"}')["form"]["name"] == "Dr. Rao"
     assert _apply_test_input(thanks, "just some text")["form"]["email"] == "just some text"  # no message field: last field
 
 
